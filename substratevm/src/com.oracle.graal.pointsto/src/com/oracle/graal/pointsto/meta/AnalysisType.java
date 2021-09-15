@@ -105,6 +105,9 @@ public class AnalysisType implements WrappedJavaType, OriginalClassProvider, Com
     private final Set<AnalysisType> subTypes;
     AnalysisType superClass;
 
+    private final Set<AnalysisType> instantiatedSubtypes = ConcurrentHashMap.newKeySet();
+    private final Set<AnalysisMethod> invokedMethods = ConcurrentHashMap.newKeySet();
+
     private final int id;
 
     private final JavaKind storageKind;
@@ -409,6 +412,7 @@ public class AnalysisType implements WrappedJavaType, OriginalClassProvider, Com
     public boolean registerAsInHeap() {
         registerAsReachable();
         if (AtomicUtils.atomicMark(isInHeap)) {
+            registerAsInstantiated(UsageKind.InHeap);
             universe.onTypeInstantiated(this, UsageKind.InHeap);
             return true;
         }
@@ -421,10 +425,24 @@ public class AnalysisType implements WrappedJavaType, OriginalClassProvider, Com
     public boolean registerAsAllocated(Node node) {
         registerAsReachable();
         if (AtomicUtils.atomicMark(isAllocated)) {
+            registerAsInstantiated(UsageKind.Allocated);
             universe.onTypeInstantiated(this, UsageKind.Allocated);
             return true;
         }
         return false;
+    }
+
+    /** Register the type as instantiated with all its super types. */
+    private void registerAsInstantiated(UsageKind usageKind) {
+        assert isAllocated.get() || isInHeap.get();
+        assert isArray() || (isInstanceClass() && !Modifier.isAbstract(getModifiers())) : this;
+        universe.hostVM.checkForbidden(this, usageKind);
+
+        AnalysisType current = this;
+        while (current != null) {
+            current.instantiatedSubtypes.add(this);
+            current = current.getSuperclass();
+        }
     }
 
     /**
@@ -433,6 +451,10 @@ public class AnalysisType implements WrappedJavaType, OriginalClassProvider, Com
      * through type flows.
      */
     public void registerAsAssignable(BigBang bb) {
+        // todo refactor
+        if (!(bb instanceof PointsToAnalysis)) {
+            return;
+        }
         TypeState typeState = TypeState.forType(((PointsToAnalysis) bb), this, true);
         /*
          * Register the assignable type with its super types. Skip this type, it can lead to a
@@ -1116,5 +1138,13 @@ public class AnalysisType implements WrappedJavaType, OriginalClassProvider, Com
 
     public interface InstanceFieldsInterceptor {
         ResolvedJavaField[] interceptInstanceFields(AnalysisUniverse universe, ResolvedJavaField[] fields, AnalysisType type);
+    }
+
+    public Set<AnalysisType> getInstantiatedSubtypes() {
+        return instantiatedSubtypes;
+    }
+
+    public Set<AnalysisMethod> getInvokedMethods() {
+        return invokedMethods;
     }
 }
