@@ -180,6 +180,10 @@ public class AnalysisUniverse implements Universe {
 
     @Override
     public AnalysisType lookup(JavaType type) {
+        if (type instanceof AnalysisType) {
+            System.err.println("Querying already made analysis type: " + type);
+            return ((AnalysisType) type);
+        }
         JavaType result = lookupAllowUnresolved(type);
         if (result == null) {
             return null;
@@ -339,6 +343,10 @@ public class AnalysisUniverse implements Universe {
 
     @Override
     public AnalysisField lookup(JavaField field) {
+        if (field instanceof AnalysisField) {
+            System.err.println("Querying already made analysis type: " + field);
+            return ((AnalysisField) field);
+        }
         JavaField result = lookupAllowUnresolved(field);
         if (result == null) {
             return null;
@@ -396,6 +404,10 @@ public class AnalysisUniverse implements Universe {
 
     @Override
     public AnalysisMethod lookup(JavaMethod method) {
+        if (method instanceof AnalysisMethod) {
+            System.err.println("Querying already made analysis method: " + method);
+            return ((AnalysisMethod) method);
+        }
         JavaMethod result = lookupAllowUnresolved(method);
         if (result == null) {
             return null;
