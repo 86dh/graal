@@ -24,6 +24,8 @@
  */
 package com.oracle.svm.hosted.classinitialization;
 
+import static com.oracle.svm.hosted.classinitialization.SimulateClassInitializerGraphDecoder.adaptForImageHeap;
+
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.stream.Collectors;
@@ -44,6 +46,7 @@ import com.oracle.svm.core.classinitialization.EnsureClassInitializedNode;
 import com.oracle.svm.core.util.VMError;
 import com.oracle.svm.hosted.SVMHost;
 import com.oracle.svm.hosted.ameta.AnalysisConstantReflectionProvider;
+import com.oracle.svm.hosted.ameta.FieldValueInterceptionSupport;
 import com.oracle.svm.hosted.fieldfolding.MarkStaticFinalFieldInitializedNode;
 import com.oracle.svm.hosted.meta.HostedConstantReflectionProvider;
 import com.oracle.svm.hosted.meta.HostedType;
@@ -163,6 +166,7 @@ import jdk.vm.ci.meta.JavaConstant;
 public class SimulateClassInitializerSupport {
 
     protected final ClassInitializationSupport classInitializationSupport = ClassInitializationSupport.singleton();
+    protected final FieldValueInterceptionSupport fieldValueInterceptionSupport = FieldValueInterceptionSupport.singleton();
     protected final SimulateClassInitializerPolicy simulateClassInitializerPolicy;
     protected final SimulateClassInitializerConstantFieldProvider simulatedFieldValueConstantFieldProvider;
 
@@ -464,9 +468,13 @@ public class SimulateClassInitializerSupport {
 
         var result = new StructuredGraph.Builder(bb.getOptions(), debug)
                         .method(classInitializer)
-                        .recordInlinedMethods(false)
                         .trackNodeSourcePosition(analysisParsedGraph.getEncodedGraph().trackNodeSourcePosition())
+                        .recordInlinedMethods(analysisParsedGraph.getEncodedGraph().isRecordingInlinedMethods())
                         .build();
+
+        if (classInitializer.isInBaseLayer()) {
+            throw SimulateClassInitializerAbortException.doAbort(clusterMember, result, "The class initializer was already simulated in the base layer.");
+        }
 
         try (var scope = debug.scope("SimulateClassInitializerGraphDecoder", result)) {
 
@@ -508,13 +516,14 @@ public class SimulateClassInitializerSupport {
             return;
         } else if (node instanceof MarkStaticFinalFieldInitializedNode) {
             return;
-
         } else if (node instanceof StoreFieldNode storeFieldNode) {
             var field = (AnalysisField) storeFieldNode.field();
             if (field.isStatic() && field.getDeclaringClass().equals(clusterMember.type)) {
                 var constantValue = storeFieldNode.value().asJavaConstant();
                 if (constantValue != null) {
-                    clusterMember.staticFieldValues.put(field, constantValue);
+                    // We use the java kind here and not the storage kind since that's what the
+                    // users of (Analysis)ConstantReflectionProvider expect.
+                    clusterMember.staticFieldValues.put(field, adaptForImageHeap(constantValue, field.getJavaKind()));
                     return;
                 }
             }
@@ -604,5 +613,9 @@ public class SimulateClassInitializerSupport {
         } else {
             return String.valueOf(reason);
         }
+    }
+
+    public ClassInitializationSupport getClassInitializationSupport() {
+        return classInitializationSupport;
     }
 }

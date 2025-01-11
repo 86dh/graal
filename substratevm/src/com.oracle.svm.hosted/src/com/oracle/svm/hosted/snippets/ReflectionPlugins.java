@@ -72,7 +72,6 @@ import com.oracle.svm.hosted.substitute.DeletedElementException;
 import com.oracle.svm.util.ModuleSupport;
 import com.oracle.svm.util.ReflectionUtil;
 
-import jdk.graal.compiler.api.replacements.SnippetReflectionProvider;
 import jdk.graal.compiler.debug.GraalError;
 import jdk.graal.compiler.nodes.ConstantNode;
 import jdk.graal.compiler.nodes.ValueNode;
@@ -115,7 +114,6 @@ public final class ReflectionPlugins {
     private static final Object NULL_MARKER = new Object();
 
     private final ImageClassLoader imageClassLoader;
-    private final SnippetReflectionProvider snippetReflection;
     private final AnnotationSubstitutionProcessor annotationSubstitutions;
     private final ClassInitializationPlugin classInitializationPlugin;
     private final AnalysisUniverse aUniverse;
@@ -123,10 +121,9 @@ public final class ReflectionPlugins {
     private final FallbackFeature fallbackFeature;
     private final ClassInitializationSupport classInitializationSupport;
 
-    private ReflectionPlugins(ImageClassLoader imageClassLoader, SnippetReflectionProvider snippetReflection, AnnotationSubstitutionProcessor annotationSubstitutions,
+    private ReflectionPlugins(ImageClassLoader imageClassLoader, AnnotationSubstitutionProcessor annotationSubstitutions,
                     ClassInitializationPlugin classInitializationPlugin, AnalysisUniverse aUniverse, ParsingReason reason, FallbackFeature fallbackFeature) {
         this.imageClassLoader = imageClassLoader;
-        this.snippetReflection = snippetReflection;
         this.annotationSubstitutions = annotationSubstitutions;
         this.classInitializationPlugin = classInitializationPlugin;
         this.aUniverse = aUniverse;
@@ -136,9 +133,9 @@ public final class ReflectionPlugins {
         this.classInitializationSupport = (ClassInitializationSupport) ImageSingletons.lookup(RuntimeClassInitializationSupport.class);
     }
 
-    public static void registerInvocationPlugins(ImageClassLoader imageClassLoader, SnippetReflectionProvider snippetReflection, AnnotationSubstitutionProcessor annotationSubstitutions,
+    public static void registerInvocationPlugins(ImageClassLoader imageClassLoader, AnnotationSubstitutionProcessor annotationSubstitutions,
                     ClassInitializationPlugin classInitializationPlugin, InvocationPlugins plugins, AnalysisUniverse aUniverse, ParsingReason reason, FallbackFeature fallbackFeature) {
-        ReflectionPlugins rp = new ReflectionPlugins(imageClassLoader, snippetReflection, annotationSubstitutions, classInitializationPlugin, aUniverse, reason, fallbackFeature);
+        ReflectionPlugins rp = new ReflectionPlugins(imageClassLoader, annotationSubstitutions, classInitializationPlugin, aUniverse, reason, fallbackFeature);
         rp.registerMethodHandlesPlugins(plugins);
         rp.registerClassPlugins(plugins);
     }
@@ -210,7 +207,7 @@ public final class ReflectionPlugins {
         dmh.register(new RequiredInvocationPlugin("getDeclaringClass", Receiver.class) {
             @Override
             public boolean apply(GraphBuilderContext b, ResolvedJavaMethod targetMethod, Receiver receiver) {
-                JavaConstant constReceiver = receiver.get().asJavaConstant();
+                JavaConstant constReceiver = receiver.get(false).asJavaConstant();
                 if (constReceiver == null || constReceiver.isNull()) {
                     return false;
                 }
@@ -289,6 +286,15 @@ public final class ReflectionPlugins {
         registerFoldInvocationPlugins(plugins, Class.class,
                         "getField", "getMethod", "getConstructor",
                         "getDeclaredField", "getDeclaredMethod", "getDeclaredConstructor");
+
+        /*
+         * The class sun.nio.ch.Reflect contains various reflection lookup methods that then pass
+         * parameters through to the actual methods in java.lang.Class. But they do additional
+         * things like calling setAccessible(true), so method inlining before analysis cannot
+         * constant-fold them automatically. So we register them manually here for folding too.
+         */
+        registerFoldInvocationPlugins(plugins, ReflectionUtil.lookupClass(false, "sun.nio.ch.Reflect"),
+                        "lookupConstructor", "lookupMethod", "lookupField");
 
         if (MissingRegistrationUtils.throwMissingRegistrationErrors() && reason.duringAnalysis() && reason != ParsingReason.JITCompilation) {
             registerBulkInvocationPlugin(plugins, Class.class, "getClasses", RuntimeReflection::registerAllClasses);
@@ -415,9 +421,23 @@ public final class ReflectionPlugins {
         if (PredefinedClassesSupport.isPredefined(clazz)) {
             return false;
         }
-        receiver.requireNonNull();
 
-        return pushConstant(b, targetMethod, clazz::getName, JavaKind.Object, clazz.getClassLoader(), true) != null;
+        // GR-57649 generalize code if needed in more places
+        ClassLoader loader = clazz.getClassLoader();
+        JavaConstant result;
+        if (loader == null) {
+            result = JavaConstant.NULL_POINTER;
+        } else {
+            result = getIntrinsicConstant(b, loader);
+        }
+
+        if (result != null) {
+            b.addPush(JavaKind.Object, ConstantNode.forConstant(result, b.getMetaAccess()));
+            traceConstant(b, targetMethod, clazz::getName, result);
+            return true;
+        }
+
+        return false;
     }
 
     /**
@@ -504,9 +524,6 @@ public final class ReflectionPlugins {
         Supplier<String> targetParameters = () -> (receiverValue == null ? "" : receiverValue + "; ") +
                         Stream.of(argValues).map(arg -> arg instanceof Object[] ? Arrays.toString((Object[]) arg) : Objects.toString(arg)).collect(Collectors.joining(", "));
 
-        if (receiver != null) {
-            receiver.requireNonNull();
-        }
         Object returnValue;
         try {
             returnValue = reflectionMethod.invoke(receiverValue, argValues);
@@ -554,7 +571,6 @@ public final class ReflectionPlugins {
         if (receiverValue == null || receiverValue == NULL_MARKER) {
             return false;
         }
-        receiver.requireNonNull();
 
         b.add(ReachabilityRegistrationNode.create(() -> registerForRuntimeReflection((T) receiverValue, registrationCallback), reason));
         return true;
@@ -581,7 +597,7 @@ public final class ReflectionPlugins {
              * If the argument is not a constant, we try to extract a varargs-parameter list for
              * Class[] arrays. This is used in many reflective lookup methods.
              */
-            return SubstrateGraphBuilderPlugins.extractClassArray(b, annotationSubstitutions, snippetReflection, arg, true);
+            return SubstrateGraphBuilderPlugins.extractClassArray(b, annotationSubstitutions, arg, true);
         }
 
         JavaConstant argConstant = arg.asJavaConstant();
@@ -612,7 +628,7 @@ public final class ReflectionPlugins {
         }
     }
 
-    private Object unboxObjectConstant(GraphBuilderContext b, JavaConstant argConstant) {
+    private static Object unboxObjectConstant(GraphBuilderContext b, JavaConstant argConstant) {
         ResolvedJavaType javaType = b.getConstantReflection().asJavaType(argConstant);
         if (javaType != null) {
             /*
@@ -625,11 +641,20 @@ public final class ReflectionPlugins {
         }
 
         /* Any other object that is not a Class. */
-        Object result = snippetReflection.asObject(Object.class, argConstant);
-        if (result != null && ALLOWED_CONSTANT_CLASSES.contains(result.getClass())) {
+        Object result = b.getSnippetReflection().asObject(Object.class, argConstant);
+        if (result != null && isAllowedConstant(result.getClass())) {
             return result;
         }
         return null;
+    }
+
+    private static boolean isAllowedConstant(Class<?> clazz) {
+        for (var allowed : ALLOWED_CONSTANT_CLASSES) {
+            if (allowed.isAssignableFrom(clazz)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**
@@ -644,7 +669,7 @@ public final class ReflectionPlugins {
      */
     @SuppressWarnings("unchecked")
     private <T> T getIntrinsic(GraphBuilderContext context, T element) {
-        if (reason == ParsingReason.UnsafeSubstitutionAnalysis || reason == ParsingReason.EarlyClassInitializerAnalysis) {
+        if (reason == ParsingReason.AutomaticUnsafeTransformation || reason == ParsingReason.EarlyClassInitializerAnalysis) {
             /* We are analyzing the static initializers and should always intrinsify. */
             return element;
         }
@@ -657,6 +682,25 @@ public final class ReflectionPlugins {
             return null;
         }
         return (T) aUniverse.replaceObject(element);
+    }
+
+    /**
+     * Same as {@link #getIntrinsic}, but returns a {@link JavaConstant}.
+     */
+    private JavaConstant getIntrinsicConstant(GraphBuilderContext context, Object element) {
+        if (reason == ParsingReason.AutomaticUnsafeTransformation || reason == ParsingReason.EarlyClassInitializerAnalysis) {
+            /* We are analyzing the static initializers and should always intrinsify. */
+            return context.getSnippetReflection().forObject(element);
+        }
+        if (isDeleted(element, context.getMetaAccess())) {
+            /*
+             * Should not intrinsify. Will fail during the reflective lookup at runtime. @Delete-ed
+             * elements are ignored by the reflection plugins regardless of the value of
+             * ReportUnsupportedElementsAtRuntime.
+             */
+            return null;
+        }
+        return aUniverse.replaceObjectWithConstant(element, context.getSnippetReflection()::forObject);
     }
 
     private static <T> boolean isDeleted(T element, MetaAccessProvider metaAccess) {
@@ -694,7 +738,7 @@ public final class ReflectionPlugins {
         } else if (intrinsicValue == NULL_MARKER) {
             intrinsicConstant = JavaConstant.NULL_POINTER;
         } else {
-            intrinsicConstant = snippetReflection.forObject(intrinsicValue);
+            intrinsicConstant = b.getSnippetReflection().forObject(intrinsicValue);
         }
 
         b.addPush(returnKind, ConstantNode.forConstant(intrinsicConstant, b.getMetaAccess()));

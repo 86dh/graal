@@ -29,6 +29,8 @@ import static jdk.graal.compiler.core.test.GraalCompilerTest.getInitialOptions;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 
+import org.junit.Test;
+
 import jdk.graal.compiler.api.test.Graal;
 import jdk.graal.compiler.debug.DebugCloseable;
 import jdk.graal.compiler.debug.DebugContext;
@@ -36,7 +38,6 @@ import jdk.graal.compiler.debug.DebugContext.Builder;
 import jdk.graal.compiler.debug.GraalError;
 import jdk.graal.compiler.debug.Indent;
 import jdk.graal.compiler.graph.Node;
-import jdk.graal.compiler.java.GraphBuilderPhase;
 import jdk.graal.compiler.nodes.StructuredGraph;
 import jdk.graal.compiler.nodes.graphbuilderconf.GraphBuilderConfiguration;
 import jdk.graal.compiler.nodes.graphbuilderconf.GraphBuilderConfiguration.Plugins;
@@ -48,14 +49,12 @@ import jdk.graal.compiler.phases.VerifyPhase.VerificationError;
 import jdk.graal.compiler.phases.tiers.HighTierContext;
 import jdk.graal.compiler.phases.util.Providers;
 import jdk.graal.compiler.runtime.RuntimeProvider;
-import org.junit.Test;
-
 import jdk.vm.ci.meta.MetaAccessProvider;
 import jdk.vm.ci.meta.ResolvedJavaMethod;
 
 public class VerifyDebugUsageTest {
 
-    private static class InvalidLogUsagePhase extends TestPhase {
+    private static final class InvalidLogUsagePhase extends TestPhase {
         @Override
         protected void run(StructuredGraph graph) {
             DebugContext debug = graph.getDebug();
@@ -66,7 +65,7 @@ public class VerifyDebugUsageTest {
 
     }
 
-    private static class InvalidLogAndIndentUsagePhase extends TestPhase {
+    private static final class InvalidLogAndIndentUsagePhase extends TestPhase {
         @Override
         @SuppressWarnings("try")
         protected void run(StructuredGraph graph) {
@@ -108,7 +107,7 @@ public class VerifyDebugUsageTest {
         }
     }
 
-    private static class InvalidVerifyUsagePhase extends TestPhase {
+    private static final class InvalidVerifyUsagePhase extends TestPhase {
         @Override
         protected void run(StructuredGraph graph) {
             DebugContext debug = graph.getDebug();
@@ -117,7 +116,7 @@ public class VerifyDebugUsageTest {
 
     }
 
-    private static class InvalidConcatLogUsagePhase extends TestPhase {
+    private static final class InvalidConcatLogUsagePhase extends TestPhase {
         @Override
         protected void run(StructuredGraph graph) {
             DebugContext debug = graph.getDebug();
@@ -128,7 +127,7 @@ public class VerifyDebugUsageTest {
 
     }
 
-    private static class InvalidConcatLogAndIndentUsagePhase extends TestPhase {
+    private static final class InvalidConcatLogAndIndentUsagePhase extends TestPhase {
         @Override
         @SuppressWarnings("try")
         protected void run(StructuredGraph graph) {
@@ -219,14 +218,14 @@ public class VerifyDebugUsageTest {
 
     public static Object sideEffect;
 
-    private static class InvalidGraalErrorCtorPhase extends TestPhase {
+    private static final class InvalidGraalErrorCtorPhase extends TestPhase {
         @Override
         protected void run(StructuredGraph graph) {
             sideEffect = new GraalError("No Error %s", graph.toString());
         }
     }
 
-    private static class ValidGraalErrorCtorPhase extends TestPhase {
+    private static final class ValidGraalErrorCtorPhase extends TestPhase {
         @Override
         protected void run(StructuredGraph graph) {
             sideEffect = new GraalError("Error %s", graph);
@@ -331,7 +330,7 @@ public class VerifyDebugUsageTest {
         PhaseSuite<HighTierContext> graphBuilderSuite = new PhaseSuite<>();
         Plugins plugins = new Plugins(new InvocationPlugins());
         GraphBuilderConfiguration config = GraphBuilderConfiguration.getDefault(plugins).withEagerResolving(true).withUnresolvedIsError(true);
-        graphBuilderSuite.appendPhase(new GraphBuilderPhase(config));
+        graphBuilderSuite.appendPhase(new TestGraphBuilderPhase(config));
         HighTierContext context = new HighTierContext(providers, graphBuilderSuite, OptimisticOptimizations.NONE);
         OptionValues options = getInitialOptions();
         DebugContext debug = new Builder(options).build();

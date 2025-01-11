@@ -26,13 +26,16 @@ package com.oracle.svm.core.jdk.proxy;
 
 import java.lang.reflect.Constructor;
 import java.lang.reflect.InvocationHandler;
-import java.lang.reflect.Proxy;
 
 import org.graalvm.nativeimage.ImageSingletons;
 
 import com.oracle.svm.core.annotate.Delete;
 import com.oracle.svm.core.annotate.Substitute;
 import com.oracle.svm.core.annotate.TargetClass;
+import com.oracle.svm.core.annotate.TargetElement;
+import com.oracle.svm.core.hub.DynamicHub;
+import com.oracle.svm.core.jdk.JDK21OrEarlier;
+import com.oracle.svm.core.jdk.JDKLatest;
 
 @TargetClass(java.lang.reflect.Proxy.class)
 final class Target_java_lang_reflect_Proxy {
@@ -43,7 +46,8 @@ final class Target_java_lang_reflect_Proxy {
 
     @Substitute
     @SuppressWarnings("unused")
-    private static Constructor<?> getProxyConstructor(Class<?> caller, ClassLoader loader, Class<?>... interfaces) {
+    @TargetElement(name = "getProxyConstructor", onlyWith = JDK21OrEarlier.class)
+    private static Constructor<?> getProxyConstructorJDK21(Class<?> caller, ClassLoader loader, Class<?>... interfaces) {
         final Class<?> cl = ImageSingletons.lookup(DynamicProxyRegistry.class).getProxyClass(loader, interfaces);
         try {
             final Constructor<?> cons = cl.getConstructor(InvocationHandler.class);
@@ -55,13 +59,43 @@ final class Target_java_lang_reflect_Proxy {
     }
 
     @Substitute
+    @TargetElement(onlyWith = JDKLatest.class)
+    private static Constructor<?> getProxyConstructor(ClassLoader loader, Class<?>... interfaces) {
+        final Class<?> cl = ImageSingletons.lookup(DynamicProxyRegistry.class).getProxyClass(loader, interfaces);
+        try {
+            final Constructor<?> cons = cl.getConstructor(InvocationHandler.class);
+            cons.setAccessible(true);
+            return cons;
+        } catch (NoSuchMethodException e) {
+            throw new InternalError(e.toString(), e);
+        }
+    }
+
+    /*
+     * Proxy.getProxyConstructor declares lambdas in its original code. Those lambdas are accessible
+     * through reflection (through {@code Proxy.class.getDeclaredMethods()}), and therefore need to
+     * be explicitly excluded. GR-51931 tracks the automatic discovery of such lambdas.
+     */
+    @Delete
+    @TargetElement(name = "lambda$getProxyConstructor$0")
+    private static native Constructor<?> lambdaGetProxyConstructor0(ClassLoader ld, Target_jdk_internal_loader_AbstractClassLoaderValue_Sub clv);
+
+    @Delete
+    @TargetElement(name = "lambda$getProxyConstructor$1")
+    private static native Constructor<?> lambdaGetProxyConstructor1(ClassLoader ld, Target_jdk_internal_loader_AbstractClassLoaderValue_Sub clv);
+
+    @Substitute
     public static boolean isProxyClass(Class<?> cl) {
-        return Proxy.class.isAssignableFrom(cl) && ImageSingletons.lookup(DynamicProxyRegistry.class).isProxyClass(cl);
+        return DynamicHub.fromClass(cl).isProxyClass();
     }
 }
 
 @TargetClass(className = "jdk.internal.loader.ClassLoaderValue")
 final class Target_jdk_internal_loader_ClassLoaderValue {
+}
+
+@TargetClass(className = "jdk.internal.loader.AbstractClassLoaderValue", innerClass = "Sub")
+final class Target_jdk_internal_loader_AbstractClassLoaderValue_Sub {
 }
 
 public class ProxySubstitutions {

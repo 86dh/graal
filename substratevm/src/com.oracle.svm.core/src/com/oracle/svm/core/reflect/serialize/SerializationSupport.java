@@ -32,18 +32,27 @@ import java.lang.invoke.SerializedLambda;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Modifier;
 import java.util.Objects;
-import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
 
 import org.graalvm.collections.EconomicMap;
-import jdk.graal.compiler.java.LambdaUtils;
+import org.graalvm.collections.MapCursor;
+import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
+import org.graalvm.nativeimage.impl.ConfigurationCondition;
 
+import com.oracle.svm.core.configure.RuntimeConditionSet;
+import com.oracle.svm.core.reflect.SubstrateConstructorAccessor;
 import com.oracle.svm.core.util.ImageHeapMap;
 import com.oracle.svm.core.util.VMError;
 
+import jdk.graal.compiler.java.LambdaUtils;
+import jdk.graal.compiler.serviceprovider.JavaVersionUtil;
+
 public class SerializationSupport implements SerializationRegistry {
+
+    public static SerializationSupport singleton() {
+        return (SerializationSupport) ImageSingletons.lookup(SerializationRegistry.class);
+    }
 
     /**
      * Method MethodAccessorGenerator.generateSerializationConstructor dynamically defines a
@@ -85,9 +94,9 @@ public class SerializationSupport implements SerializationRegistry {
         }
     }
 
-    private final Constructor<?> stubConstructor;
+    private Constructor<?> stubConstructor;
 
-    private static final class SerializationLookupKey {
+    public static final class SerializationLookupKey {
         private final Class<?> declaringClass;
         private final Class<?> targetConstructorClass;
 
@@ -95,6 +104,14 @@ public class SerializationSupport implements SerializationRegistry {
             assert declaringClass != null && targetConstructorClass != null;
             this.declaringClass = declaringClass;
             this.targetConstructorClass = targetConstructorClass;
+        }
+
+        public Class<?> getDeclaringClass() {
+            return declaringClass;
+        }
+
+        public Class<?> getTargetConstructorClass() {
+            return targetConstructorClass;
         }
 
         @Override
@@ -118,38 +135,95 @@ public class SerializationSupport implements SerializationRegistry {
     private final EconomicMap<SerializationLookupKey, Object> constructorAccessors;
 
     @Platforms(Platform.HOSTED_ONLY.class)
-    public SerializationSupport(Constructor<?> stubConstructor) {
+    public SerializationSupport() {
         constructorAccessors = ImageHeapMap.create();
+    }
+
+    public void setStubConstructor(Constructor<?> stubConstructor) {
+        VMError.guarantee(this.stubConstructor == null, "Cannot reset stubConstructor");
         this.stubConstructor = stubConstructor;
     }
 
     @Platforms(Platform.HOSTED_ONLY.class)
     public Object addConstructorAccessor(Class<?> declaringClass, Class<?> targetConstructorClass, Object constructorAccessor) {
+        if (JavaVersionUtil.JAVA_SPEC > 21) {
+            VMError.guarantee(constructorAccessor instanceof SubstrateConstructorAccessor, "Not a SubstrateConstructorAccessor: %s", constructorAccessor);
+        }
         SerializationLookupKey key = new SerializationLookupKey(declaringClass, targetConstructorClass);
         return constructorAccessors.putIfAbsent(key, constructorAccessor);
     }
 
-    @Platforms(Platform.HOSTED_ONLY.class) private final Set<Class<?>> classes = ConcurrentHashMap.newKeySet();
-
     @Platforms(Platform.HOSTED_ONLY.class)
-    public void registerSerializationTargetClass(Class<?> serializationTargetClass) {
-        classes.add(serializationTargetClass);
+    public SerializationLookupKey getKeyFromConstructorAccessorClass(Class<?> constructorAccessorClass) {
+        MapCursor<SerializationLookupKey, Object> cursor = constructorAccessors.getEntries();
+        while (cursor.advance()) {
+            if (cursor.getValue().getClass().equals(constructorAccessorClass)) {
+                return cursor.getKey();
+            }
+        }
+        return null;
     }
 
-    @Override
     @Platforms(Platform.HOSTED_ONLY.class)
-    public boolean isRegisteredForSerialization(Class<?> cl) {
-        return classes.contains(cl);
+    public boolean isGeneratedSerializationClassLoader(ClassLoader classLoader) {
+        var constructorAccessorsCursor = constructorAccessors.getEntries();
+        while (constructorAccessorsCursor.advance()) {
+            if (constructorAccessorsCursor.getValue().getClass().getClassLoader() == classLoader) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    @Platforms(Platform.HOSTED_ONLY.class)
+    public String getClassLoaderSerializationLookupKey(ClassLoader classLoader) {
+        var constructorAccessorsCursor = constructorAccessors.getEntries();
+        while (constructorAccessorsCursor.advance()) {
+            if (constructorAccessorsCursor.getValue().getClass().getClassLoader() == classLoader) {
+                var key = constructorAccessorsCursor.getKey();
+                return key.declaringClass.getName() + key.targetConstructorClass.getName();
+            }
+        }
+        throw VMError.shouldNotReachHere("No constructor accessor uses the class loader %s", classLoader);
+    }
+
+    private final EconomicMap<Class<?>, RuntimeConditionSet> classes = EconomicMap.create();
+    private final EconomicMap<String, RuntimeConditionSet> lambdaCapturingClasses = EconomicMap.create();
+
+    @Platforms(Platform.HOSTED_ONLY.class)
+    public void registerSerializationTargetClass(ConfigurationCondition cnd, Class<?> serializationTargetClass) {
+        synchronized (classes) {
+            var previous = classes.putIfAbsent(serializationTargetClass, RuntimeConditionSet.createHosted(cnd));
+            if (previous != null) {
+                previous.addCondition(cnd);
+            }
+        }
+    }
+
+    @Platforms(Platform.HOSTED_ONLY.class)
+    public void registerLambdaCapturingClass(ConfigurationCondition cnd, String lambdaCapturingClass) {
+        synchronized (lambdaCapturingClasses) {
+            var previousConditions = lambdaCapturingClasses.putIfAbsent(lambdaCapturingClass, RuntimeConditionSet.createHosted(cnd));
+            if (previousConditions != null) {
+                previousConditions.addCondition(cnd);
+            }
+        }
+    }
+
+    @Platforms(Platform.HOSTED_ONLY.class)
+    public boolean isLambdaCapturingClassRegistered(String lambdaCapturingClass) {
+        return lambdaCapturingClasses.containsKey(lambdaCapturingClass);
     }
 
     @Override
     public Object getSerializationConstructorAccessor(Class<?> rawDeclaringClass, Class<?> rawTargetConstructorClass) {
         Class<?> declaringClass = rawDeclaringClass;
 
-        if (declaringClass.getName().contains(LambdaUtils.LAMBDA_CLASS_NAME_SUBSTRING)) {
+        if (LambdaUtils.isLambdaClass(declaringClass)) {
             declaringClass = SerializedLambda.class;
         }
 
+        VMError.guarantee(stubConstructor != null, "Called too early, no stub constructor yet.");
         Class<?> targetConstructorClass = Modifier.isAbstract(declaringClass.getModifiers()) ? stubConstructor.getDeclaringClass() : rawTargetConstructorClass;
         Object constructorAccessor = constructorAccessors.get(new SerializationLookupKey(declaringClass, targetConstructorClass));
 
@@ -159,7 +233,7 @@ public class SerializationSupport implements SerializationRegistry {
             String targetConstructorClassName = targetConstructorClass.getName();
             if (ThrowMissingRegistrationErrors.hasBeenSet()) {
                 MissingSerializationRegistrationUtils.missingSerializationRegistration(declaringClass,
-                                "type " + declaringClass.getName() + " with target constructor class: " + targetConstructorClassName);
+                                "type " + declaringClass.getTypeName() + " with target constructor class: " + targetConstructorClassName);
             } else {
                 throw VMError.unsupportedFeature("SerializationConstructorAccessor class not found for declaringClass: " + declaringClass.getName() +
                                 " (targetConstructorClass: " + targetConstructorClassName + "). Usually adding " + declaringClass.getName() +
@@ -167,5 +241,11 @@ public class SerializationSupport implements SerializationRegistry {
             }
             return null;
         }
+    }
+
+    @Override
+    public boolean isRegisteredForSerialization(Class<?> clazz) {
+        var conditionSet = classes.get(clazz);
+        return conditionSet != null && conditionSet.satisfied();
     }
 }

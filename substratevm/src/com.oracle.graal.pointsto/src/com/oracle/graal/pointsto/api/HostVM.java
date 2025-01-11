@@ -27,6 +27,7 @@
 package com.oracle.graal.pointsto.api;
 
 import java.lang.reflect.AnnotatedElement;
+import java.lang.reflect.Field;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Comparator;
@@ -45,7 +46,6 @@ import com.oracle.graal.pointsto.meta.AnalysisField;
 import com.oracle.graal.pointsto.meta.AnalysisMethod;
 import com.oracle.graal.pointsto.meta.AnalysisType;
 import com.oracle.graal.pointsto.meta.AnalysisUniverse;
-import com.oracle.graal.pointsto.meta.FieldValueComputer;
 import com.oracle.graal.pointsto.meta.HostedProviders;
 import com.oracle.graal.pointsto.phases.InlineBeforeAnalysisGraphDecoder;
 import com.oracle.graal.pointsto.phases.InlineBeforeAnalysisPolicy;
@@ -74,13 +74,17 @@ public abstract class HostVM {
     protected final ClassLoader classLoader;
     protected final List<BiConsumer<AnalysisMethod, StructuredGraph>> methodAfterParsingListeners;
     private final List<BiConsumer<DuringAnalysisAccess, Class<?>>> classReachabilityListeners;
-    private HostedProviders providers;
+    protected HostedProviders providers;
 
     protected HostVM(OptionValues options, ClassLoader classLoader) {
         this.options = options;
         this.classLoader = classLoader;
         this.methodAfterParsingListeners = new CopyOnWriteArrayList<>();
         this.classReachabilityListeners = new ArrayList<>();
+    }
+
+    public ClassLoader getClassLoader() {
+        return classLoader;
     }
 
     public OptionValues options() {
@@ -90,7 +94,6 @@ public abstract class HostVM {
     /**
      * Check if the provided object is a relocated pointer.
      * 
-     * @param metaAccess the meta-access provider
      * @param constant the constant to check
      */
     public boolean isRelocatedPointer(JavaConstant constant) {
@@ -125,20 +128,20 @@ public abstract class HostVM {
     }
 
     /**
-     * Check if the type is allowed.
-     * 
-     * @param type the type to check
-     * @param kind usage kind
-     */
-    public void checkForbidden(AnalysisType type, AnalysisType.UsageKind kind) {
-    }
-
-    /**
      * Register newly created type.
      * 
      * @param newValue the type to register
      */
     public void registerType(AnalysisType newValue) {
+    }
+
+    /**
+     * Register newly created type with a given identityHashCode.
+     *
+     * @param newValue the type to register
+     * @param identityHashCode the hash code of the hub
+     */
+    public void registerType(AnalysisType newValue, int identityHashCode) {
     }
 
     /**
@@ -155,7 +158,28 @@ public abstract class HostVM {
      * 
      * @param newValue the type to initialize
      */
-    public abstract void onTypeReachable(AnalysisType newValue);
+    public abstract void onTypeReachable(BigBang bb, AnalysisType newValue);
+
+    /**
+     * Run initialization tasks for a type when it is marked as instantiated.
+     *
+     * @param bb the static analysis
+     * @param type the type that is marked as instantiated
+     */
+    public void onTypeInstantiated(BigBang bb, AnalysisType type) {
+    }
+
+    public boolean isCoreType(@SuppressWarnings("unused") AnalysisType type) {
+        return false;
+    }
+
+    public boolean useBaseLayer() {
+        return false;
+    }
+
+    public boolean analyzedInPriorLayer(@SuppressWarnings("unused") AnalysisMethod method) {
+        return false;
+    }
 
     /**
      * Check if an {@link AnalysisType} is initialized.
@@ -248,15 +272,7 @@ public abstract class HostVM {
         return true;
     }
 
-    public void installInThread(@SuppressWarnings("unused") Object vmConfig) {
-        Thread.currentThread().setContextClassLoader(classLoader);
-    }
-
     public void clearInThread() {
-    }
-
-    public Object getConfiguration() {
-        return null;
     }
 
     public abstract Comparator<? super ResolvedJavaType> getTypeComparator();
@@ -313,6 +329,35 @@ public abstract class HostVM {
     @SuppressWarnings("unused")
     public HostedProviders getProviders(MultiMethod.MultiMethodKey key) {
         return providers;
+    }
+
+    /**
+     * This method should only be used by the {@code ClassInclusionPolicy} to determine which fields
+     * should be included in the shared layer.
+     */
+    @SuppressWarnings("unused")
+    public boolean isFieldIncluded(BigBang bb, Field field) {
+        return true;
+    }
+
+    /**
+     * See {@link HostVM#isFieldIncluded(BigBang, Field)}.
+     */
+    @SuppressWarnings("unused")
+    public boolean isFieldIncluded(BigBang bb, AnalysisField field) {
+        return true;
+    }
+
+    public boolean isClosedTypeWorld() {
+        return true;
+    }
+
+    public boolean enableTrackAcrossLayers() {
+        return false;
+    }
+
+    public boolean enableReachableInCurrentLayer() {
+        return false;
     }
 
     /**
@@ -419,9 +464,5 @@ public abstract class HostVM {
          * support it within deoptimization targets and runtime-compiled methods.
          */
         return method.isOriginalMethod();
-    }
-
-    public FieldValueComputer createFieldValueComputer(@SuppressWarnings("unused") AnalysisField field) {
-        return null;
     }
 }

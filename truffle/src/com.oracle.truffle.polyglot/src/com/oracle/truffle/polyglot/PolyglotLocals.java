@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2020, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -258,7 +258,7 @@ final class PolyglotLocals {
                 if (context.engine != instrument.engine) {
                     throw new AssertionError("Invalid sharing of locations.");
                 }
-                return EngineAccessor.INSTRUMENT.invokeContextLocalFactory(factory, context.creatorTruffleContext);
+                return EngineAccessor.INSTRUMENT.invokeContextLocalFactory(factory, context.getCreatorTruffleContext());
             }
         }
 
@@ -484,7 +484,7 @@ final class PolyglotLocals {
                 if (context.engine != instrument.engine) {
                     throw new AssertionError("Invalid sharing of locations.");
                 }
-                return EngineAccessor.INSTRUMENT.invokeContextThreadLocalFactory(factory, context.creatorTruffleContext, thread);
+                return EngineAccessor.INSTRUMENT.invokeContextThreadLocalFactory(factory, context.getCreatorTruffleContext(), thread);
             }
         }
 

@@ -279,8 +279,8 @@ final class LanguageAccessor extends Accessor {
         }
 
         @Override
-        public TruffleContext createTruffleContext(Object impl, boolean creator) {
-            return new TruffleContext(impl, creator);
+        public TruffleContext createTruffleContext(Object impl, TruffleContext parentContext) {
+            return new TruffleContext(impl, parentContext);
         }
 
         @Override
@@ -462,11 +462,12 @@ final class LanguageAccessor extends Accessor {
 
         @Override
         public void configureLoggers(Object vmObject, Map<String, Level> logLevels, Object... loggers) {
-            for (Object loggerCache : loggers) {
+            for (Object logger : loggers) {
+                TruffleLogger.LoggerCache loggerCache = (TruffleLogger.LoggerCache) logger;
                 if (logLevels == null) {
-                    ((TruffleLogger.LoggerCache) loggerCache).removeLogLevelsForVMObject(vmObject);
-                } else {
-                    ((TruffleLogger.LoggerCache) loggerCache).addLogLevelsForVMObject(vmObject, logLevels);
+                    loggerCache.removeLogLevelsForVMObject(vmObject);
+                } else if (!logLevels.isEmpty() || !ENGINE.isContextBoundLogger(loggerCache.getSPI())) {
+                    loggerCache.addLogLevelsForVMObject(vmObject, logLevels);
                 }
             }
         }
@@ -563,6 +564,15 @@ final class LanguageAccessor extends Accessor {
         @Override
         public void performTLAction(ThreadLocalAction action, ThreadLocalAction.Access access) {
             action.perform(access);
+        }
+
+        @Override
+        public void notifyTLActionBlocked(ThreadLocalAction action, ThreadLocalAction.Access access, boolean blocked) {
+            if (blocked) {
+                action.notifyBlocked(access);
+            } else {
+                action.notifyUnblocked(access);
+            }
         }
 
         @Override

@@ -27,8 +27,8 @@ package jdk.graal.compiler.hotspot.replacements;
 import static jdk.graal.compiler.hotspot.GraalHotSpotVMConfig.INJECTED_VMCONFIG;
 
 import jdk.graal.compiler.hotspot.meta.HotSpotProviders;
-import jdk.graal.compiler.nodes.gc.SerialArrayRangeWriteBarrier;
-import jdk.graal.compiler.nodes.gc.SerialWriteBarrier;
+import jdk.graal.compiler.nodes.gc.SerialArrayRangeWriteBarrierNode;
+import jdk.graal.compiler.nodes.gc.SerialWriteBarrierNode;
 import jdk.graal.compiler.nodes.spi.LoweringTool;
 import jdk.graal.compiler.options.OptionValues;
 import jdk.graal.compiler.replacements.ReplacementsUtil;
@@ -37,7 +37,6 @@ import jdk.graal.compiler.replacements.SnippetTemplate.AbstractTemplates;
 import jdk.graal.compiler.replacements.SnippetTemplate.SnippetInfo;
 import jdk.graal.compiler.replacements.gc.SerialWriteBarrierSnippets;
 import jdk.graal.compiler.word.Word;
-import org.graalvm.word.WordFactory;
 
 public class HotSpotSerialWriteBarrierSnippets extends SerialWriteBarrierSnippets {
 
@@ -46,7 +45,7 @@ public class HotSpotSerialWriteBarrierSnippets extends SerialWriteBarrierSnippet
 
     @Override
     public Word cardTableAddress() {
-        return WordFactory.unsigned(HotSpotReplacementsUtil.cardTableStart(INJECTED_VMCONFIG));
+        return Word.unsigned(HotSpotReplacementsUtil.cardTableStart(INJECTED_VMCONFIG));
     }
 
     @Override
@@ -97,11 +96,11 @@ public class HotSpotSerialWriteBarrierSnippets extends SerialWriteBarrierSnippet
                             GC_CARD_LOCATION);
         }
 
-        public void lower(SerialWriteBarrier barrier, LoweringTool tool) {
+        public void lower(SerialWriteBarrierNode barrier, LoweringTool tool) {
             lowerer.lower(this, serialPreciseWriteBarrier, serialImpreciseWriteBarrier, barrier, tool);
         }
 
-        public void lower(SerialArrayRangeWriteBarrier barrier, LoweringTool tool) {
+        public void lower(SerialArrayRangeWriteBarrierNode barrier, LoweringTool tool) {
             lowerer.lower(this, serialArrayRangeWriteBarrier, barrier, tool);
         }
     }

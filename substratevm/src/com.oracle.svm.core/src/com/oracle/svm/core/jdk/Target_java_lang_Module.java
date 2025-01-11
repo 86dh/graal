@@ -24,64 +24,78 @@
  */
 package com.oracle.svm.core.jdk;
 
-import java.util.Arrays;
-import java.util.List;
-import java.util.Objects;
-import java.util.stream.Collectors;
-
 import com.oracle.svm.core.annotate.Alias;
+import com.oracle.svm.core.annotate.RecomputeFieldValue;
 import com.oracle.svm.core.annotate.Substitute;
 import com.oracle.svm.core.annotate.TargetClass;
 import com.oracle.svm.core.annotate.TargetElement;
+import com.oracle.svm.core.util.BasedOnJDKFile;
 
+/**
+ * Substitution class for {@link java.lang.Module}. We need to substitute native methods
+ * particularly, because original methods in the JDK contain VM state updates and perform additional
+ * bookkeeping. We implement all the data structures we need to answer module system queries in Java
+ * (see {@link ModuleNative}. In order to preserve JCK compatibility, we need to perform all the
+ * checks performed by original methods and throw the exact same exception types and messages.
+ */
 @SuppressWarnings("unused")
 @TargetClass(value = java.lang.Module.class)
 public final class Target_java_lang_Module {
+
+    /**
+     * {@link Alias} to make {@code Module.layer} non-final. The actual run-time value is set via
+     * reflection in {@code ModuleLayerFeatureUtils#patchModuleLayerField}, which is called after
+     * analysis. Thus, we cannot leave it {@code final}, because the analysis might otherwise
+     * constant-fold the initial {@code null} value. Ideally, we would make it {@code @Stable}, but
+     * our substitution system currently does not allow this (GR-60154).
+     */
+    @Alias //
+    @RecomputeFieldValue(isFinal = false, kind = RecomputeFieldValue.Kind.None)
+    // @Stable (no effect currently GR-60154)
+    private ModuleLayer layer;
+
+    @Substitute
+    @TargetElement(onlyWith = ForeignDisabled.class)
+    @SuppressWarnings("static-method")
+    public boolean isNativeAccessEnabled() {
+        throw ForeignDisabledSubstitutions.fail();
+    }
+
     @Alias
     @TargetElement(onlyWith = JDK21OrEarlier.class)
     public native void ensureNativeAccess(Class<?> owner, String methodName);
 
     @Alias
-    @TargetElement(onlyWith = JDK22OrLater.class)
-    public native void ensureNativeAccess(Class<?> owner, String methodName, Class<?> currentClass);
+    @TargetElement(onlyWith = JDKLatest.class)
+    public native void ensureNativeAccess(Class<?> owner, String methodName, Class<?> currentClass, boolean jni);
 
     @Substitute
+    @BasedOnJDKFile("https://github.com/openjdk/jdk/blob/jdk-24+22/src/hotspot/share/classfile/modules.cpp#L279-L478")
     private static void defineModule0(Module module, boolean isOpen, String version, String location, Object[] pns) {
-        if (Arrays.stream(pns).anyMatch(Objects::isNull)) {
-            throw new IllegalArgumentException("Bad package name");
-        }
-        List<String> packages = Arrays.stream(pns).map(Object::toString).collect(Collectors.toUnmodifiableList());
-        ModuleUtil.defineModule(module, isOpen, packages);
+        ModuleNative.defineModule(module, isOpen, pns);
     }
 
     @Substitute
+    @BasedOnJDKFile("https://github.com/openjdk/jdk/blob/jdk-23+10/src/hotspot/share/classfile/modules.cpp#L763-L799")
     private static void addReads0(Module from, Module to) {
-        if (Objects.isNull(from)) {
-            throw new NullPointerException("The from_module is null");
-        }
+        ModuleNative.addReads(from, to);
     }
 
     @Substitute
+    @BasedOnJDKFile("https://github.com/openjdk/jdk/blob/jdk-23+10/src/hotspot/share/classfile/modules.cpp#L753-L761")
     private static void addExports0(Module from, String pn, Module to) {
-        if (Objects.isNull(to)) {
-            throw new NullPointerException("The to_module is null");
-        }
-
-        ModuleUtil.checkFromModuleAndPackageNullability(from, pn);
-        ModuleUtil.checkIsPackageContainedInModule(pn, from);
+        ModuleNative.addExports(from, pn, to);
     }
 
     @Substitute
+    @BasedOnJDKFile("https://github.com/openjdk/jdk/blob/jdk-23+10/src/hotspot/share/classfile/modules.cpp#L686-L750")
     private static void addExportsToAll0(Module from, String pn) {
-        ModuleUtil.checkFromModuleAndPackageNullability(from, pn);
-        ModuleUtil.checkIsPackageContainedInModule(pn, from);
+        ModuleNative.addExportsToAll(from, pn);
     }
 
     @Substitute
+    @BasedOnJDKFile("https://github.com/openjdk/jdk/blob/jdk-23+10/src/hotspot/share/classfile/modules.cpp#L869-L918")
     private static void addExportsToAllUnnamed0(Module from, String pn) {
-        ModuleUtil.checkFromModuleAndPackageNullability(from, pn);
-        if (from.isNamed()) {
-            ModuleUtil.checkIsPackageContainedInModule(pn, from);
-        }
+        ModuleNative.addExportsToAllUnnamed(from, pn);
     }
 }

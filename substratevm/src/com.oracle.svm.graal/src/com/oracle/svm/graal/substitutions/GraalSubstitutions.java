@@ -34,14 +34,15 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
+import jdk.graal.compiler.word.Word;
 import org.graalvm.collections.EconomicMap;
 import org.graalvm.collections.EconomicSet;
 import org.graalvm.collections.Equivalence;
 import org.graalvm.nativeimage.CurrentIsolate;
 import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.hosted.FieldValueTransformer;
+import org.graalvm.nativeimage.impl.IsolateSupport;
 import org.graalvm.word.Pointer;
-import org.graalvm.word.WordFactory;
 
 import com.oracle.svm.core.SubstrateTargetDescription;
 import com.oracle.svm.core.annotate.Alias;
@@ -63,12 +64,11 @@ import com.oracle.svm.graal.GraalCompilerSupport;
 import com.oracle.svm.graal.TruffleRuntimeCompilationSupport;
 import com.oracle.svm.graal.hosted.FieldsOffsetsFeature;
 import com.oracle.svm.graal.hosted.GraalCompilerFeature;
-import com.oracle.svm.graal.hosted.RuntimeCompilationFeature;
+import com.oracle.svm.graal.hosted.runtimecompilation.RuntimeCompilationFeature;
 import com.oracle.svm.graal.meta.SubstrateMethod;
 import com.oracle.svm.util.ReflectionUtil;
 
 import jdk.graal.compiler.core.common.CompilationIdentifier;
-import jdk.graal.compiler.core.common.SuppressFBWarnings;
 import jdk.graal.compiler.core.gen.NodeLIRBuilder;
 import jdk.graal.compiler.core.match.MatchRuleRegistry;
 import jdk.graal.compiler.core.match.MatchStatement;
@@ -80,10 +80,6 @@ import jdk.graal.compiler.debug.TTY;
 import jdk.graal.compiler.debug.TimeSource;
 import jdk.graal.compiler.graph.Node;
 import jdk.graal.compiler.graph.NodeClass;
-import jdk.graal.compiler.lir.CompositeValue;
-import jdk.graal.compiler.lir.CompositeValueClass;
-import jdk.graal.compiler.lir.LIRInstruction;
-import jdk.graal.compiler.lir.LIRInstructionClass;
 import jdk.graal.compiler.lir.gen.ArithmeticLIRGeneratorTool;
 import jdk.graal.compiler.lir.phases.LIRPhase;
 import jdk.graal.compiler.nodes.Invoke;
@@ -123,7 +119,8 @@ final class Target_jdk_graal_compiler_nodes_graphbuilderconf_InvocationPlugins {
 final class Target_jdk_graal_compiler_phases_common_inlining_info_elem_InlineableGraph {
 
     @Substitute
-    private static StructuredGraph parseBytecodes(ResolvedJavaMethod method, HighTierContext context, CanonicalizerPhase canonicalizer, StructuredGraph caller, boolean trackNodeSourcePosition) {
+    private static StructuredGraph parseBytecodes(ResolvedJavaMethod method, Invoke invoke, HighTierContext context, CanonicalizerPhase canonicalizer, StructuredGraph caller,
+                    boolean trackNodeSourcePosition) {
         DebugContext debug = caller.getDebug();
         StructuredGraph result = TruffleRuntimeCompilationSupport.decodeGraph(debug, null, CompilationIdentifier.INVALID_COMPILATION_ID, (SubstrateMethod) method, caller);
         assert result != null : "should not try to inline method when no graph is in the native image";
@@ -229,7 +226,7 @@ final class Target_jdk_graal_compiler_serviceprovider_IsolateUtil {
 
     @Substitute
     public static long getIsolateID() {
-        return ImageSingletons.lookup(GraalCompilerSupport.class).getIsolateId();
+        return ImageSingletons.lookup(IsolateSupport.class).getIsolateID();
     }
 }
 
@@ -237,7 +234,7 @@ class GlobalAtomicLongAddressProvider implements FieldValueTransformer {
     @Override
     public Object transform(Object receiver, Object originalValue) {
         long initialValue = ((GlobalAtomicLong) receiver).getInitialValue();
-        return CGlobalDataFactory.createWord(WordFactory.unsigned(initialValue), null, true);
+        return CGlobalDataFactory.createWord(Word.unsigned(initialValue), null, true);
     }
 }
 
@@ -362,17 +359,6 @@ final class Target_jdk_graal_compiler_graph_NodeClass {
     @RecomputeFieldValue(kind = RecomputeFieldValue.Kind.Custom, declClass = FieldsOffsetsFeature.SuccessorsIterationMaskRecomputation.class)//
     private long successorIteration;
 
-    @Substitute
-    @SuppressWarnings("unlikely-arg-type")
-    @SuppressFBWarnings(value = {"GC_UNRELATED_TYPES"}, justification = "Class is DynamicHub")
-    public static NodeClass<?> get(Class<?> clazz) {
-        NodeClass<?> nodeClass = GraalCompilerSupport.get().nodeClasses.get(clazz);
-        if (nodeClass == null) {
-            throw VMError.shouldNotReachHere(String.format("Unknown node class: %s%n", clazz.getName()));
-        }
-        return nodeClass;
-    }
-
     @Alias //
     private String shortName;
 
@@ -380,36 +366,6 @@ final class Target_jdk_graal_compiler_graph_NodeClass {
     public String shortName() {
         assert shortName != null;
         return shortName;
-    }
-}
-
-@TargetClass(value = LIRInstructionClass.class, onlyWith = GraalCompilerFeature.IsEnabled.class)
-final class Target_jdk_graal_compiler_lir_LIRInstructionClass {
-
-    @Substitute
-    @SuppressWarnings("unlikely-arg-type")
-    @SuppressFBWarnings(value = {"GC_UNRELATED_TYPES"}, justification = "Class is DynamicHub")
-    public static LIRInstructionClass<?> get(Class<? extends LIRInstruction> clazz) {
-        LIRInstructionClass<?> instructionClass = GraalCompilerSupport.get().instructionClasses.get(clazz);
-        if (instructionClass == null) {
-            throw VMError.shouldNotReachHere(String.format("Unknown instruction class: %s%n", clazz.getName()));
-        }
-        return instructionClass;
-    }
-}
-
-@TargetClass(value = CompositeValueClass.class, onlyWith = GraalCompilerFeature.IsEnabled.class)
-final class Target_jdk_graal_compiler_lir_CompositeValueClass {
-
-    @Substitute
-    @SuppressWarnings("unlikely-arg-type")
-    @SuppressFBWarnings(value = {"GC_UNRELATED_TYPES"}, justification = "Class is DynamicHub")
-    public static CompositeValueClass<?> get(Class<? extends CompositeValue> clazz) {
-        CompositeValueClass<?> compositeValueClass = GraalCompilerSupport.get().compositeValueClasses.get(clazz);
-        if (compositeValueClass == null) {
-            throw VMError.shouldNotReachHere(String.format("Unknown composite value class: %s%n", clazz.getName()));
-        }
-        return compositeValueClass;
     }
 }
 

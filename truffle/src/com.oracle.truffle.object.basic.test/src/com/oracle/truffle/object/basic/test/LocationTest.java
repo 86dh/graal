@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2016, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -42,13 +42,16 @@ package com.oracle.truffle.object.basic.test;
 
 import static com.oracle.truffle.object.basic.test.DOTestAsserts.getLocationType;
 
+import java.lang.invoke.MethodHandles;
 import java.util.Arrays;
 import java.util.List;
 
 import org.junit.Assert;
+import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.Parameterized;
+import org.junit.runners.Parameterized.Parameter;
 import org.junit.runners.Parameterized.Parameters;
 
 import com.oracle.truffle.api.object.DynamicObject;
@@ -57,17 +60,33 @@ import com.oracle.truffle.api.object.Location;
 import com.oracle.truffle.api.object.Property;
 import com.oracle.truffle.api.object.Shape;
 import com.oracle.truffle.api.test.AbstractParametrizedLibraryTest;
+import com.oracle.truffle.object.ShapeImpl;
 
 @SuppressWarnings("deprecation")
 @RunWith(Parameterized.class)
 public class LocationTest extends AbstractParametrizedLibraryTest {
 
-    @Parameters(name = "{0}")
-    public static List<TestRun> data() {
-        return Arrays.asList(TestRun.values());
+    @Parameter(1) public boolean useLookup;
+
+    @Parameters(name = "{0},{1}")
+    public static List<Object[]> data() {
+        return Arrays.stream(TestRun.values()).flatMap(run -> List.of(Boolean.FALSE, Boolean.TRUE).stream().map(lookup -> new Object[]{run, lookup})).toList();
     }
 
-    final Shape rootShape = Shape.newBuilder().layout(TestDynamicObjectDefault.class).build();
+    Shape rootShape;
+
+    @Before
+    public void setup() {
+        rootShape = makeRootShape();
+    }
+
+    private Shape makeRootShape() {
+        if (useLookup) {
+            return Shape.newBuilder().layout(TestDynamicObjectDefault.class, MethodHandles.lookup()).build();
+        } else {
+            return Shape.newBuilder().layout(TestDynamicObjectDefault.class).build();
+        }
+    }
 
     private DynamicObject newInstance() {
         return new TestDynamicObjectDefault(rootShape);
@@ -190,7 +209,7 @@ public class LocationTest extends AbstractParametrizedLibraryTest {
 
     @Test
     public void testLocationDecoratorEquals() {
-        Shape.Allocator allocator = rootShape.allocator();
+        var allocator = ((ShapeImpl) rootShape).allocator();
         Location intLocation1 = allocator.locationForType(int.class);
         Location intLocation2 = allocator.locationForType(int.class);
         Assert.assertEquals(intLocation1.getClass(), intLocation2.getClass());
@@ -213,7 +232,7 @@ public class LocationTest extends AbstractParametrizedLibraryTest {
 
     @Test
     public void testLocationIsPrimitive() {
-        Shape.Allocator allocator = rootShape.allocator();
+        var allocator = ((ShapeImpl) rootShape).allocator();
 
         Location objectLocation = allocator.locationForType(Object.class);
         Assert.assertFalse(objectLocation.isPrimitive());

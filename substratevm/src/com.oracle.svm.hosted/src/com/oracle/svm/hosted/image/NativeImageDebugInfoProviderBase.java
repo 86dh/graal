@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2023, 2024, Oracle and/or its affiliates. All rights reserved.
  * Copyright (c) 2023, 2023, Red Hat Inc. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
@@ -25,9 +25,16 @@
  */
 package com.oracle.svm.hosted.image;
 
+import static com.oracle.svm.hosted.c.info.AccessorInfo.AccessorKind.ADDRESS;
+import static com.oracle.svm.hosted.c.info.AccessorInfo.AccessorKind.GETTER;
+import static com.oracle.svm.hosted.c.info.AccessorInfo.AccessorKind.SETTER;
+
 import java.nio.file.FileSystems;
 import java.nio.file.Path;
 import java.util.HashMap;
+
+import org.graalvm.nativeimage.ImageSingletons;
+import org.graalvm.word.WordBase;
 
 import com.oracle.svm.core.StaticFieldsSupport;
 import com.oracle.svm.core.SubstrateOptions;
@@ -47,7 +54,6 @@ import com.oracle.svm.hosted.c.info.ElementInfo;
 import com.oracle.svm.hosted.c.info.SizableInfo;
 import com.oracle.svm.hosted.c.info.StructFieldInfo;
 import com.oracle.svm.hosted.c.info.StructInfo;
-import com.oracle.svm.hosted.lambda.LambdaSubstitutionType;
 import com.oracle.svm.hosted.meta.HostedField;
 import com.oracle.svm.hosted.meta.HostedMetaAccess;
 import com.oracle.svm.hosted.meta.HostedMethod;
@@ -55,6 +61,7 @@ import com.oracle.svm.hosted.meta.HostedType;
 import com.oracle.svm.hosted.substitute.InjectedFieldsType;
 import com.oracle.svm.hosted.substitute.SubstitutionMethod;
 import com.oracle.svm.hosted.substitute.SubstitutionType;
+
 import jdk.graal.compiler.core.common.CompressEncoding;
 import jdk.graal.compiler.core.target.Backend;
 import jdk.vm.ci.code.RegisterConfig;
@@ -63,14 +70,6 @@ import jdk.vm.ci.meta.JavaKind;
 import jdk.vm.ci.meta.JavaType;
 import jdk.vm.ci.meta.ResolvedJavaMethod;
 import jdk.vm.ci.meta.ResolvedJavaType;
-import jdk.vm.ci.meta.Signature;
-
-import org.graalvm.nativeimage.ImageSingletons;
-import org.graalvm.word.WordBase;
-
-import static com.oracle.svm.hosted.c.info.AccessorInfo.AccessorKind.ADDRESS;
-import static com.oracle.svm.hosted.c.info.AccessorInfo.AccessorKind.GETTER;
-import static com.oracle.svm.hosted.c.info.AccessorInfo.AccessorKind.SETTER;
 
 /**
  * Abstract base class for implementation of DebugInfoProvider API providing a suite of useful
@@ -82,13 +81,13 @@ public abstract class NativeImageDebugInfoProviderBase {
     protected final NativeLibraries nativeLibs;
     protected final RuntimeConfiguration runtimeConfiguration;
     protected final boolean useHeapBase;
-    protected final int compressShift;
+    protected final int compressionShift;
     protected final int referenceSize;
     protected final int pointerSize;
-    protected final int referenceAlignment;
+    protected final int objectAlignment;
     protected final int primitiveStartOffset;
     protected final int referenceStartOffset;
-    protected final int tagsMask;
+    protected final int reservedBitsMask;
 
     protected final HostedType hubType;
     protected final HostedType wordBaseType;
@@ -106,20 +105,20 @@ public abstract class NativeImageDebugInfoProviderBase {
         ObjectHeader objectHeader = Heap.getHeap().getObjectHeader();
         NativeImageHeap.ObjectInfo primitiveFields = heap.getObjectInfo(StaticFieldsSupport.getStaticPrimitiveFields());
         NativeImageHeap.ObjectInfo objectFields = heap.getObjectInfo(StaticFieldsSupport.getStaticObjectFields());
-        this.tagsMask = objectHeader.getReservedBitsMask();
+        this.reservedBitsMask = objectHeader.getReservedBitsMask();
         if (SubstrateOptions.SpawnIsolates.getValue()) {
             CompressEncoding compressEncoding = ImageSingletons.lookup(CompressEncoding.class);
             this.useHeapBase = compressEncoding.hasBase();
-            this.compressShift = (compressEncoding.hasShift() ? compressEncoding.getShift() : 0);
+            this.compressionShift = (compressEncoding.hasShift() ? compressEncoding.getShift() : 0);
         } else {
             this.useHeapBase = false;
-            this.compressShift = 0;
+            this.compressionShift = 0;
         }
         this.referenceSize = getObjectLayout().getReferenceSize();
-        this.referenceAlignment = getObjectLayout().getAlignment();
+        this.objectAlignment = getObjectLayout().getAlignment();
         /* Offsets need to be adjusted relative to the heap base plus partition-specific offset. */
-        primitiveStartOffset = (int) primitiveFields.getAddress();
-        referenceStartOffset = (int) objectFields.getAddress();
+        primitiveStartOffset = (int) primitiveFields.getOffset();
+        referenceStartOffset = (int) objectFields.getOffset();
         javaKindToHostedType = initJavaKindToHostedTypes(metaAccess);
     }
 
@@ -171,12 +170,13 @@ public abstract class NativeImageDebugInfoProviderBase {
     }
 
     protected static ResolvedJavaType getOriginal(HostedType hostedType) {
-        /* partially unwrap then traverse through substitutions to the original */
+        /*
+         * partially unwrap then traverse through substitutions to the original. We don't want to
+         * get the original type of LambdaSubstitutionType to keep the stable name
+         */
         ResolvedJavaType javaType = hostedType.getWrapped().getWrapped();
         if (javaType instanceof SubstitutionType) {
             return ((SubstitutionType) javaType).getOriginal();
-        } else if (javaType instanceof LambdaSubstitutionType) {
-            return ((LambdaSubstitutionType) javaType).getOriginal();
         } else if (javaType instanceof InjectedFieldsType) {
             return ((InjectedFieldsType) javaType).getOriginal();
         }
@@ -335,13 +335,10 @@ public abstract class NativeImageDebugInfoProviderBase {
     }
 
     protected static int elementSize(ElementInfo elementInfo) {
-        if (elementInfo == null || !(elementInfo instanceof SizableInfo)) {
+        if (!(elementInfo instanceof SizableInfo) || elementInfo instanceof StructInfo structInfo && structInfo.isIncomplete()) {
             return 0;
         }
-        if (elementInfo instanceof StructInfo && ((StructInfo) elementInfo).isIncomplete()) {
-            return 0;
-        }
-        Integer size = ((SizableInfo) elementInfo).getSizeInfo().getProperty();
+        Integer size = ((SizableInfo) elementInfo).getSizeInBytes();
         assert size != null;
         return size;
     }
@@ -372,11 +369,11 @@ public abstract class NativeImageDebugInfoProviderBase {
         return useHeapBase;
     }
 
-    public int oopCompressShift() {
-        return compressShift;
+    public int compressionShift() {
+        return compressionShift;
     }
 
-    public int oopReferenceSize() {
+    public int referenceSize() {
         return referenceSize;
     }
 
@@ -384,12 +381,12 @@ public abstract class NativeImageDebugInfoProviderBase {
         return pointerSize;
     }
 
-    public int oopAlignment() {
-        return referenceAlignment;
+    public int objectAlignment() {
+        return objectAlignment;
     }
 
-    public int oopTagsMask() {
-        return tagsMask;
+    public int reservedBitsMask() {
+        return reservedBitsMask;
     }
 
     public int compiledCodeMax() {
@@ -408,7 +405,7 @@ public abstract class NativeImageDebugInfoProviderBase {
         assert constant.getJavaKind() == JavaKind.Object && !constant.isNull() : "invalid constant for object offset lookup";
         NativeImageHeap.ObjectInfo objectInfo = heap.getConstantInfo(constant);
         if (objectInfo != null) {
-            return objectInfo.getAddress();
+            return objectInfo.getOffset();
         }
         return -1;
     }
@@ -448,12 +445,17 @@ public abstract class NativeImageDebugInfoProviderBase {
         SubstrateCallingConventionKind callingConventionKind = method.getCallingConventionKind();
         HostedType declaringClass = method.getDeclaringClass();
         HostedType receiverType = method.isStatic() ? null : declaringClass;
-        Signature signature = method.getSignature();
-        SubstrateCallingConventionType type = callingConventionKind.toType(false);
+        var signature = method.getSignature();
+        final SubstrateCallingConventionType type;
+        if (callingConventionKind.isCustom()) {
+            type = method.getCustomCallingConventionType();
+        } else {
+            type = callingConventionKind.toType(false);
+        }
         Backend backend = runtimeConfiguration.lookupBackend(method);
         RegisterConfig registerConfig = backend.getCodeCache().getRegisterConfig();
         assert registerConfig instanceof SubstrateRegisterConfig;
-        return (SubstrateCallingConvention) registerConfig.getCallingConvention(type, signature.getReturnType(null), signature.toParameterTypes(receiverType), backend);
+        return (SubstrateCallingConvention) registerConfig.getCallingConvention(type, signature.getReturnType(), signature.toParameterTypes(receiverType), backend);
     }
 
     /*

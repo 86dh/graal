@@ -26,19 +26,26 @@ package com.oracle.truffle.espresso.impl;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
+import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.locks.ReadWriteLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 import com.oracle.truffle.api.CompilerAsserts;
+import com.oracle.truffle.espresso.classfile.ConstantPool;
 import com.oracle.truffle.espresso.classfile.Constants;
-import com.oracle.truffle.espresso.descriptors.Symbol;
-import com.oracle.truffle.espresso.descriptors.Symbol.Type;
-import com.oracle.truffle.espresso.descriptors.Types;
+import com.oracle.truffle.espresso.classfile.ParserKlass;
+import com.oracle.truffle.espresso.classfile.constantpool.PoolConstant;
+import com.oracle.truffle.espresso.classfile.descriptors.Symbol;
+import com.oracle.truffle.espresso.classfile.descriptors.Symbol.Type;
+import com.oracle.truffle.espresso.classfile.descriptors.Types;
+import com.oracle.truffle.espresso.classfile.perf.DebugCloseable;
+import com.oracle.truffle.espresso.classfile.perf.DebugTimer;
+import com.oracle.truffle.espresso.constantpool.Resolution;
+import com.oracle.truffle.espresso.constantpool.RuntimeConstantPool;
 import com.oracle.truffle.espresso.impl.ModuleTable.ModuleEntry;
 import com.oracle.truffle.espresso.meta.EspressoError;
-import com.oracle.truffle.espresso.perf.DebugCloseable;
-import com.oracle.truffle.espresso.perf.DebugTimer;
+import com.oracle.truffle.espresso.meta.Meta;
 import com.oracle.truffle.espresso.redefinition.DefineKlassListener;
 import com.oracle.truffle.espresso.runtime.EspressoContext;
 import com.oracle.truffle.espresso.runtime.EspressoException;
@@ -66,21 +73,21 @@ public abstract class ClassRegistry {
      * registry.
      */
     public static final class ClassDefinitionInfo {
-        public static final ClassDefinitionInfo EMPTY = new ClassDefinitionInfo(null, null, null, null, null, false, false);
+        public static final ClassDefinitionInfo EMPTY = new ClassDefinitionInfo(null, null, null, null, null, false, false, false);
 
         // Constructor for regular definition, but with a specified protection domain
         public ClassDefinitionInfo(StaticObject protectionDomain) {
-            this(protectionDomain, null, null, null, null, false, false);
+            this(protectionDomain, null, null, null, null, false, false, false);
         }
 
         // Constructor for Unsafe anonymous class definition.
         public ClassDefinitionInfo(StaticObject protectionDomain, ObjectKlass hostKlass, StaticObject[] patches) {
-            this(protectionDomain, hostKlass, patches, null, null, false, false);
+            this(protectionDomain, hostKlass, patches, null, null, false, false, true);
         }
 
         // Constructor for Hidden class definition.
-        public ClassDefinitionInfo(StaticObject protectionDomain, ObjectKlass dynamicNest, StaticObject classData, boolean isStrongHidden) {
-            this(protectionDomain, null, null, dynamicNest, classData, true, isStrongHidden);
+        public ClassDefinitionInfo(StaticObject protectionDomain, ObjectKlass dynamicNest, StaticObject classData, boolean isStrongHidden, boolean forceAllowVMAnnotations) {
+            this(protectionDomain, null, null, dynamicNest, classData, true, isStrongHidden, forceAllowVMAnnotations);
         }
 
         private ClassDefinitionInfo(StaticObject protectionDomain,
@@ -89,7 +96,8 @@ public abstract class ClassRegistry {
                         ObjectKlass dynamicNest,
                         StaticObject classData,
                         boolean isHidden,
-                        boolean isStrongHidden) {
+                        boolean isStrongHidden,
+                        boolean forceAllowVMAnnotations) {
             // isStrongHidden => isHidden
             assert !isStrongHidden || isHidden;
             this.protectionDomain = protectionDomain;
@@ -99,6 +107,7 @@ public abstract class ClassRegistry {
             this.classData = classData;
             this.isHidden = isHidden;
             this.isStrongHidden = isStrongHidden;
+            this.forceAllowVMAnnotations = forceAllowVMAnnotations;
             assert isAnonymousClass() || patches == null;
         }
 
@@ -113,7 +122,7 @@ public abstract class ClassRegistry {
         public final StaticObject classData;
         public final boolean isHidden;
         public final boolean isStrongHidden;
-        public long klassID = -1;
+        public final boolean forceAllowVMAnnotations;
 
         public boolean addedToRegistry() {
             return !isAnonymousClass() && !isHidden();
@@ -131,16 +140,16 @@ public abstract class ClassRegistry {
             return isStrongHidden;
         }
 
+        public boolean forceAllowVMAnnotations() {
+            return forceAllowVMAnnotations;
+        }
+
         public int patchFlags(int classFlags) {
             int flags = classFlags;
             if (isHidden()) {
                 flags |= Constants.ACC_IS_HIDDEN_CLASS;
             }
             return flags;
-        }
-
-        public void initKlassID(long futureKlassID) {
-            this.klassID = futureKlassID;
         }
     }
 
@@ -266,7 +275,7 @@ public abstract class ClassRegistry {
     }
 
     public void initUnnamedModule(StaticObject unnamedModule) {
-        this.unnamed = ModuleEntry.createUnnamedModuleEntry(unnamedModule, this);
+        this.unnamed = modules.createUnnamedModuleEntry(unnamedModule);
     }
 
     /**
@@ -372,12 +381,37 @@ public abstract class ClassRegistry {
         Symbol<Type> superKlassType = parserKlass.getSuperKlass();
 
         ObjectKlass klass = createKlass(context, parserKlass, type, superKlassType, info);
+
+        if (info.isAnonymousClass() && info.patches != null) {
+            patchAnonymousClass(klass.getConstantPool(), info.patches);
+        }
+
         if (info.addedToRegistry()) {
             registerKlass(klass, type);
         } else if (info.isStrongHidden()) {
             registerStrongHiddenClass(klass);
         }
         return klass;
+    }
+
+    private static void patchAnonymousClass(RuntimeConstantPool constantPool, StaticObject[] patches) {
+        int maxCPIndex = Math.min(patches.length, constantPool.length());
+        for (int i = 1; i < maxCPIndex; i++) {
+            if (patches[i] != null && StaticObject.notNull(patches[i])) {
+                PoolConstant poolConstant = constantPool.at(i);
+                ConstantPool.Tag tag = poolConstant.tag();
+                if (Objects.requireNonNull(tag) == ConstantPool.Tag.STRING) {
+                    /*
+                     * The runtime CP entry tag may be different from the actual constant that is
+                     * pre-resolved. Pre-resolved/patched entries may contain arbitrary guest
+                     * objects, like classes.
+                     */
+                    constantPool.patchAt(i, Resolution.preResolvedConstant(patches[i], tag));
+                } else {
+                    throw EspressoError.unimplemented("Patching anonymous class CP entry with: " + tag);
+                }
+            }
+        }
     }
 
     private ParserKlass parseKlass(ClassLoadingEnv env, byte[] bytes, Symbol<Type> typeOrNull, ClassDefinitionInfo info) throws EspressoClassLoadingException.SecurityException {
@@ -449,25 +483,75 @@ public abstract class ClassRegistry {
 
         if (superKlass != null) {
             if (!Klass.checkAccess(superKlass, klass, true)) {
-                throw EspressoClassLoadingException.illegalAccessError("class " + type + " cannot access its superclass " + superKlassType);
+                StringBuilder sb = new StringBuilder().append("class ").append(klass.getExternalName()).append(" cannot access its superclass ").append(superKlass.getExternalName());
+                superTypeAccessMessage(klass, superKlass, sb, context);
+                throw EspressoClassLoadingException.illegalAccessError(sb.toString());
             }
             if (!superKlass.permittedSubclassCheck(klass)) {
-                throw EspressoClassLoadingException.incompatibleClassChangeError("class " + type + " is not a permitted subclass of class " + superKlassType);
+                throw EspressoClassLoadingException.incompatibleClassChangeError("class " + klass.getExternalName() + " is not a permitted subclass of class " + superKlass.getExternalName());
             }
         }
 
         for (ObjectKlass interf : superInterfaces) {
             if (interf != null) {
                 if (!Klass.checkAccess(interf, klass, true)) {
-                    throw EspressoClassLoadingException.illegalAccessError("class " + type + " cannot access its superinterface " + interf.getType());
+                    StringBuilder sb = new StringBuilder().append("class ").append(klass.getExternalName()).append(" cannot access its superinterface ").append(interf.getExternalName());
+                    superTypeAccessMessage(klass, interf, sb, context);
+                    throw EspressoClassLoadingException.illegalAccessError(sb.toString());
                 }
                 if (!interf.permittedSubclassCheck(klass)) {
-                    throw EspressoClassLoadingException.incompatibleClassChangeError("class " + type + " is not a permitted subclass of interface " + superKlassType);
+                    throw EspressoClassLoadingException.incompatibleClassChangeError("class " + klass.getExternalName() + " is not a permitted subclass of interface " + interf.getExternalName());
                 }
             }
         }
 
         return klass;
+    }
+
+    private static void superTypeAccessMessage(ObjectKlass sub, ObjectKlass sup, StringBuilder sb, EspressoContext context) {
+        if (context.getJavaVersion().modulesEnabled()) {
+            sb.append(" (");
+            Meta meta = context.getMeta();
+            if (sup.module() == sub.module()) {
+                sb.append(sub.getExternalName());
+                sb.append(" and ");
+                classInModuleOfLoader(sup, true, sb, meta);
+            } else {
+                classInModuleOfLoader(sub, false, sb, meta);
+                sb.append("; ");
+                classInModuleOfLoader(sup, false, sb, meta);
+            }
+            sb.append(")");
+        }
+    }
+
+    public static void classInModuleOfLoader(ObjectKlass klass, boolean plural, StringBuilder sb, Meta meta) {
+        assert meta.getJavaVersion().modulesEnabled() && meta.java_lang_ClassLoader_nameAndId != null;
+        sb.append(klass.getExternalName());
+        if (plural) {
+            sb.append(" are in ");
+        } else {
+            sb.append(" is in ");
+        }
+        ModuleEntry module = klass.module();
+        if (module.isNamed()) {
+            sb.append("module ").append(module.getNameAsString());
+            // TODO version
+        } else {
+            sb.append("unnamed module");
+        }
+        sb.append(" of loader ");
+        StaticObject loader = klass.getDefiningClassLoader();
+        if (StaticObject.isNull(loader)) {
+            sb.append("bootstrap");
+        } else {
+            StaticObject nameAndId = meta.java_lang_ClassLoader_nameAndId.getObject(loader);
+            if (StaticObject.isNull(nameAndId)) {
+                sb.append(loader.getKlass().getExternalName());
+            } else {
+                sb.append(meta.toHostString(nameAndId));
+            }
+        }
     }
 
     private void registerKlass(ObjectKlass klass, Symbol<Type> type) {
@@ -534,7 +618,7 @@ public abstract class ClassRegistry {
         return dynamicModuleWrapper;
     }
 
-    public final class DynamicModuleWrapper {
+    public static final class DynamicModuleWrapper {
         private ModuleEntry dynamicProxyModule;
 
         public ModuleEntry getDynamicProxyModule() {

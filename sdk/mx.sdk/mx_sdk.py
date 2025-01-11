@@ -1,5 +1,5 @@
 #
-# Copyright (c) 2018, 2023, Oracle and/or its affiliates. All rights reserved.
+# Copyright (c) 2018, 2024, Oracle and/or its affiliates. All rights reserved.
 # DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
 #
 # The Universal Permissive License (UPL), Version 1.0
@@ -99,7 +99,16 @@ def build_oracle_compliant_javadoc_args(suite, product_name, feature_name):
 def javadoc(args):
     """build the Javadoc for all API packages"""
     extraArgs = build_oracle_compliant_javadoc_args(_suite, 'GraalVM', 'SDK')
-    mx.javadoc(['--unified', '--exclude-packages', 'org.graalvm.polyglot.tck'] + extraArgs + args)
+    excludedPackages = [
+        'org.graalvm.polyglot.tck',
+        'org.graalvm.sdk',
+        'org.graalvm.shadowed.org.jline.reader',
+        'org.graalvm.shadowed.org.jline.reader.impl.completer',
+        'org.graalvm.shadowed.org.jline.reader.impl.history',
+        'org.graalvm.shadowed.org.jline.terminal.impl',
+        'org.graalvm.shadowed.org.jline.utils',
+    ]
+    mx.javadoc(['--unified', '--disallow-all-warnings', '--exclude-packages', ','.join(excludedPackages)] + extraArgs + args)
 
 def upx(args):
     """compress binaries using the upx tool"""
@@ -134,7 +143,7 @@ graal_sdk_compiler_component = mx_sdk_vm.GraalVmJreComponent(
     third_party_license_files=[],
     dependencies=[],
     jar_distributions=[],
-    boot_jars=['sdk:WORD', 'sdk:COLLECTIONS'],
+    boot_jars=['sdk:WORD', 'sdk:COLLECTIONS', 'sdk:NATIVEIMAGE'],
     stability="supported",
 )
 mx_sdk_vm.register_graalvm_component(graal_sdk_compiler_component)
@@ -208,6 +217,7 @@ GraalVmTruffleComponent = mx_sdk_vm.GraalVmTruffleComponent
 GraalVmLanguage = mx_sdk_vm.GraalVmLanguage
 GraalVmTool = mx_sdk_vm.GraalVmTool
 GraalVMSvmMacro = mx_sdk_vm.GraalVMSvmMacro
+GraalVmSvmTool = mx_sdk_vm.GraalVmSvmTool
 GraalVmJdkComponent = mx_sdk_vm.GraalVmJdkComponent
 GraalVmJreComponent = mx_sdk_vm.GraalVmJreComponent
 GraalVmJvmciComponent = mx_sdk_vm.GraalVmJvmciComponent
@@ -253,17 +263,62 @@ class GraalVMJDKConfig(mx.JDKConfig):
     A JDKConfig that configures the built GraalVM as a JDK config.
     """
     def __init__(self):
-        mx.JDKConfig.__init__(self, mx_sdk_vm.graalvm_home(fatalIfMissing=True), tag='graalvm')
+        default_jdk = mx.get_jdk(tag='default')
+        if GraalVMJDKConfig.is_graalvm(default_jdk.home):
+            graalvm_home = default_jdk.home
+            additional_vm_args = []
+        elif GraalVMJDKConfig.is_libgraal_jdk(default_jdk.home):
+            # Oracle JDK includes the libjvmci compiler, allowing it to function as GraalVM.
+            # However, the Graal compiler is disabled by default and must be explicitly enabled using the -XX:+UseJVMCICompiler option.
+            graalvm_home = default_jdk.home
+            # GR-58388: Switch '-XX:+UseJVMCINativeLibrary' to '-XX:+UseGraalJIT'
+            additional_vm_args = ['-XX:+UnlockExperimentalVMOptions', '-XX:+EnableJVMCI', '-XX:+UseJVMCINativeLibrary', '-XX:-UnlockExperimentalVMOptions']
+        else:
+            graalvm_home = mx_sdk_vm.graalvm_home(fatalIfMissing=True)
+            additional_vm_args = []
+        self._home_internal = graalvm_home
+        self._vm_args = additional_vm_args
+        mx.JDKConfig.__init__(self, graalvm_home, tag='graalvm')
 
     @property
     def home(self):
-        return mx_sdk_vm.graalvm_home(fatalIfMissing=True)
+        return self._home_internal
 
     @home.setter
     def home(self, home):
         return
 
+    def processArgs(self, args, addDefaultArgs=True):
+        processed_args = super(GraalVMJDKConfig, self).processArgs(args, addDefaultArgs)
+        if addDefaultArgs and self._vm_args:
+            processed_args = self._vm_args + processed_args
+        return processed_args
+
+    @staticmethod
+    def is_graalvm(java_home):
+        release_file = os.path.join(java_home, 'release')
+        if not os.path.isfile(release_file):
+            return False
+        with open(release_file, 'r') as file:
+            for line in file:
+                if line.startswith('GRAALVM_VERSION'):
+                    return True
+        return False
+
+    @staticmethod
+    def is_libgraal_jdk(java_home):
+        release_file = os.path.join(java_home, 'release')
+        if not os.path.isfile(release_file):
+            return False
+        with open(release_file, 'r') as file:
+            for line in file:
+                if line.startswith('MODULES') and 'jdk.graal.compiler.lib' in line:
+                    # Oracle JDK has libjvmcicompiler
+                    return True
+        return False
+
 class GraalVMJDK(mx.JDKFactory):
+
     def getJDKConfig(self):
         return GraalVMJDKConfig()
 

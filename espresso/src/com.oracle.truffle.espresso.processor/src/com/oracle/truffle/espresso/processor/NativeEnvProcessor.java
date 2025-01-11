@@ -26,6 +26,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.NoSuchElementException;
 import java.util.Set;
 import java.util.stream.Collectors;
@@ -154,7 +155,7 @@ public final class NativeEnvProcessor extends EspressoProcessor {
         this.envPackage = target.envPackage;
         this.envClassName = target.envClassName;
 
-        this.envName = envClassName.toLowerCase();
+        this.envName = envClassName.toLowerCase(Locale.ROOT);
         this.imports = envPackage + "." + envClassName + ";\n";
     }
 
@@ -457,7 +458,7 @@ public final class NativeEnvProcessor extends EspressoProcessor {
                         .withOverrideAnnotation() //
                         .withModifiers(new ModifierBuilder().asPublic().asFinal()) //
                         .withReturnType("Object") //
-                        .withParams("Object " + ENV_ARG_NAME, "Object[] " + ARGS_NAME);
+                        .withParams("com.oracle.truffle.espresso.jni.NativeEnv " + ENV_ARG_NAME, "Object[] " + ARGS_NAME);
         if (!h.skipSafepoint) {
             invoke.addBodyLine(EspressoProcessor.SAFEPOINT_POLL);
         }

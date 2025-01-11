@@ -34,11 +34,10 @@ import org.graalvm.collections.EconomicMap;
 import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.hosted.Feature;
 
-import com.oracle.graal.pointsto.api.DefaultUnsafePartition;
 import com.oracle.graal.pointsto.meta.AnalysisField;
+import com.oracle.graal.pointsto.meta.AnalysisType;
 import com.oracle.svm.core.BuildPhaseProvider;
 import com.oracle.svm.core.fieldvaluetransformer.FieldValueTransformerWithAvailability;
-import com.oracle.svm.core.graal.GraalEdgeUnsafePartition;
 import com.oracle.svm.core.util.VMError;
 import com.oracle.svm.graal.GraalCompilerSupport;
 import com.oracle.svm.hosted.FeatureImpl.BeforeAnalysisAccessImpl;
@@ -46,15 +45,12 @@ import com.oracle.svm.hosted.FeatureImpl.CompilationAccessImpl;
 import com.oracle.svm.hosted.FeatureImpl.DuringAnalysisAccessImpl;
 import com.oracle.svm.hosted.FeatureImpl.DuringSetupAccessImpl;
 import com.oracle.svm.hosted.meta.HostedMetaAccess;
-import com.oracle.svm.util.UnsafePartitionKind;
 
 import jdk.graal.compiler.core.common.FieldIntrospection;
 import jdk.graal.compiler.core.common.Fields;
 import jdk.graal.compiler.graph.Edges;
 import jdk.graal.compiler.graph.Node;
 import jdk.graal.compiler.graph.NodeClass;
-import jdk.graal.compiler.lir.CompositeValue;
-import jdk.graal.compiler.lir.CompositeValueClass;
 import jdk.graal.compiler.lir.LIRInstruction;
 import jdk.graal.compiler.lir.LIRInstructionClass;
 import jdk.internal.misc.Unsafe;
@@ -70,8 +66,8 @@ public class FieldsOffsetsFeature implements Feature {
 
     abstract static class IterationMaskRecomputation implements FieldValueTransformerWithAvailability {
         @Override
-        public ValueAvailability valueAvailability() {
-            return ValueAvailability.AfterAnalysis;
+        public boolean isAvailable() {
+            return BuildPhaseProvider.isHostedUniverseBuilt();
         }
 
         @Override
@@ -169,8 +165,6 @@ public class FieldsOffsetsFeature implements Feature {
         } else if (LIRInstruction.class.isAssignableFrom(newlyReachableClass) && newlyReachableClass != LIRInstruction.class) {
             FieldsOffsetsFeature.<LIRInstructionClass<?>> registerClass(newlyReachableClass, GraalCompilerSupport.get().instructionClasses, LIRInstructionClass::get, true, access);
 
-        } else if (CompositeValue.class.isAssignableFrom(newlyReachableClass) && newlyReachableClass != CompositeValue.class) {
-            FieldsOffsetsFeature.<CompositeValueClass<?>> registerClass(newlyReachableClass, GraalCompilerSupport.get().compositeValueClasses, CompositeValueClass::get, true, access);
         }
     }
 
@@ -191,32 +185,36 @@ public class FieldsOffsetsFeature implements Feature {
         if (introspection instanceof NodeClass<?>) {
             NodeClass<?> nodeClass = (NodeClass<?>) introspection;
 
+            /* The partial evaluator allocates Node classes via Unsafe. */
+            AnalysisType nodeType = config.getMetaAccess().lookupJavaType(nodeClass.getJavaClass());
+            nodeType.registerInstantiatedCallback(unused -> config.registerAsUnsafeAllocated(nodeType));
+
             Fields dataFields = nodeClass.getData();
-            registerFields(dataFields, DefaultUnsafePartition.get(), config, "Graal node data field");
+            registerFields(dataFields, config, "Graal node data field");
 
             Fields inputEdges = nodeClass.getInputEdges();
-            registerFields(inputEdges, GraalEdgeUnsafePartition.get(), config, "Graal node input edge");
+            registerFields(inputEdges, config, "Graal node input edge");
 
             Fields successorEdges = nodeClass.getSuccessorEdges();
-            registerFields(successorEdges, GraalEdgeUnsafePartition.get(), config, "Graal node successor edge");
+            registerFields(successorEdges, config, "Graal node successor edge");
 
             /* Ensure field shortName is initialized, so that the instance is immutable. */
             nodeClass.shortName();
 
         } else {
             for (Fields fields : introspection.getAllFields()) {
-                registerFields(fields, DefaultUnsafePartition.get(), config, "Graal field");
+                registerFields(fields, config, "Graal field");
             }
         }
     }
 
-    private static void registerFields(Fields fields, UnsafePartitionKind partitionKind, BeforeAnalysisAccessImpl config, Object reason) {
+    private static void registerFields(Fields fields, BeforeAnalysisAccessImpl config, Object reason) {
         getReplacements().put(fields.getOffsets(), new FieldsOffsetsReplacement(fields));
 
         for (int i = 0; i < fields.getCount(); i++) {
             AnalysisField aField = config.getMetaAccess().lookupJavaField(findField(fields, i));
             aField.getType().registerAsReachable(aField);
-            config.registerAsUnsafeAccessed(aField, partitionKind, reason);
+            config.registerAsUnsafeAccessed(aField, reason);
         }
     }
 

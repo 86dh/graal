@@ -29,11 +29,12 @@ import static com.oracle.svm.core.jfr.JfrThreadLocal.getNativeBufferList;
 
 import java.nio.charset.StandardCharsets;
 
+import com.oracle.svm.core.jfr.oldobject.JfrOldObjectRepository;
+import jdk.graal.compiler.word.Word;
 import org.graalvm.nativeimage.IsolateThread;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
 import org.graalvm.word.UnsignedWord;
-import org.graalvm.word.WordFactory;
 
 import com.oracle.svm.core.Uninterruptible;
 import com.oracle.svm.core.heap.VMOperationInfos;
@@ -98,7 +99,7 @@ public final class JfrChunkFileWriter implements JfrChunkWriter {
 
     @Platforms(Platform.HOSTED_ONLY.class)
     public JfrChunkFileWriter(JfrGlobalMemory globalMemory, JfrStackTraceRepository stackTraceRepo, JfrMethodRepository methodRepo, JfrTypeRepository typeRepo, JfrSymbolRepository symbolRepo,
-                    JfrThreadRepository threadRepo) {
+                    JfrThreadRepository threadRepo, JfrOldObjectRepository oldObjectRepo) {
         this.lock = new VMMutex("jfrChunkWriter");
         this.globalMemory = globalMemory;
         this.metadata = new JfrMetadata(null);
@@ -109,7 +110,7 @@ public final class JfrChunkFileWriter implements JfrChunkWriter {
          * the write order. This ordering is required to prevent races during flushing without
          * changing epoch.
          */
-        this.flushCheckpointRepos = new JfrRepository[]{stackTraceRepo, methodRepo, typeRepo, symbolRepo};
+        this.flushCheckpointRepos = new JfrRepository[]{stackTraceRepo, methodRepo, oldObjectRepo, typeRepo, symbolRepo};
         this.threadCheckpointRepos = new JfrRepository[]{threadRepo};
     }
 
@@ -237,7 +238,7 @@ public final class JfrChunkFileWriter implements JfrChunkWriter {
 
         getFileSupport().close(fd);
         filename = null;
-        fd = WordFactory.nullPointer();
+        fd = Word.nullPointer();
     }
 
     private void writeFileHeader() {
@@ -541,7 +542,7 @@ public final class JfrChunkFileWriter implements JfrChunkWriter {
     @Uninterruptible(reason = "Locking without transition requires that the whole critical section is uninterruptible.")
     private void traverseThreadLocalBuffers(JfrBufferList list, boolean flushpoint) {
         JfrBufferNode node = list.getHead();
-        JfrBufferNode prev = WordFactory.nullPointer();
+        JfrBufferNode prev = Word.nullPointer();
 
         while (node.isNonNull()) {
             JfrBufferNode next = node.getNext();

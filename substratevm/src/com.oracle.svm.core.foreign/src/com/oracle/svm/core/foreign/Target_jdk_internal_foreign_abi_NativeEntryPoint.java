@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2023, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -25,6 +25,8 @@
 package com.oracle.svm.core.foreign;
 
 import java.lang.invoke.MethodType;
+import java.util.Arrays;
+import java.util.Objects;
 
 import com.oracle.svm.core.annotate.Substitute;
 import com.oracle.svm.core.annotate.TargetClass;
@@ -36,7 +38,7 @@ import jdk.internal.foreign.abi.VMStorage;
  * Packs the address of a {@link com.oracle.svm.hosted.foreign.DowncallStub} with some extra
  * information.
  */
-@TargetClass(className = "jdk.internal.foreign.abi.NativeEntryPoint")
+@TargetClass(className = "jdk.internal.foreign.abi.NativeEntryPoint", onlyWith = ForeignFunctionsEnabled.class)
 @Substitute
 public final class Target_jdk_internal_foreign_abi_NativeEntryPoint {
 
@@ -56,8 +58,19 @@ public final class Target_jdk_internal_foreign_abi_NativeEntryPoint {
                     MethodType methodType,
                     boolean needsReturnBuffer,
                     int capturedStateMask,
-                    boolean needsTransition) {
-        return NativeEntryPointInfo.makeEntryPoint(abi, argMoves, returnMoves, methodType, needsReturnBuffer, capturedStateMask, needsTransition);
+                    boolean needsTransition,
+                    boolean usingAddressPairs) {
+        /*
+         * A VMStorage may be null only when the Linker.Option.critical(allowHeapAccess=true) option
+         * is passed. (see
+         * jdk.internal.foreign.abi.x64.sysv.CallArranger.UnboxBindingCalculator.getBindings). It is
+         * an implementation detail but this method is called by JDK code which cannot be changed to
+         * pass the value of allowHeapAccess as well. If the FunctionDescriptor does not contain any
+         * AddressLayout, then allowHeapAccess will always be false. We ensure this is the case by
+         * construction in the NativeEntryPointInfo.make function.
+         */
+        boolean allowHeapAccess = Arrays.stream(argMoves).anyMatch(Objects::isNull);
+        return NativeEntryPointInfo.makeEntryPoint(abi, argMoves, returnMoves, methodType, needsReturnBuffer, capturedStateMask, needsTransition, allowHeapAccess);
     }
 
     @Substitute

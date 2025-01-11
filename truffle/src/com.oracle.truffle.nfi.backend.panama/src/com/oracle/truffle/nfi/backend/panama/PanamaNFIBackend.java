@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -117,6 +117,8 @@ final class PanamaNFIBackend implements NFIBackend {
                 return SymbolLookup.libraryLookup(name, ctx.getContextArena());
             } catch (IllegalArgumentException ex) {
                 throw new NFIError("Library lookup returned null. Library likely does not exist on the provided location.", this);
+            } catch (IllegalCallerException ic) {
+                throw NFIError.illegalNativeAccess(this);
             }
         }
 
@@ -175,7 +177,7 @@ final class PanamaNFIBackend implements NFIBackend {
     @ExportMessage
     Object createSignatureBuilder(
                     @CachedLibrary("this") NFIBackendLibrary self,
-                    @Bind("$node") Node node,
+                    @Bind Node node,
                     @Cached InlinedBranchProfile error,
                     @Cached ArrayBuilderFactory builderFactory) {
         if (!PanamaNFIContext.get(self).env.isNativeAccessAllowed()) {

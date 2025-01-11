@@ -24,15 +24,15 @@
  */
 package com.oracle.svm.core.posix.linux;
 
-import jdk.graal.compiler.core.common.NumUtil;
+import jdk.graal.compiler.word.Word;
 import org.graalvm.nativeimage.StackValue;
 import org.graalvm.nativeimage.c.type.CCharPointer;
 import org.graalvm.word.Pointer;
-import org.graalvm.word.WordFactory;
 
 import com.oracle.svm.core.SubstrateDiagnostics;
 import com.oracle.svm.core.SubstrateDiagnostics.DiagnosticThunkRegistry;
 import com.oracle.svm.core.SubstrateDiagnostics.ErrorContext;
+import com.oracle.svm.core.SubstrateOptions;
 import com.oracle.svm.core.c.CGlobalData;
 import com.oracle.svm.core.c.CGlobalDataFactory;
 import com.oracle.svm.core.feature.AutomaticallyRegisteredFeature;
@@ -40,6 +40,8 @@ import com.oracle.svm.core.feature.InternalFeature;
 import com.oracle.svm.core.heap.RestrictHeapAccess;
 import com.oracle.svm.core.log.Log;
 import com.oracle.svm.core.os.RawFileOperationSupport;
+
+import jdk.graal.compiler.core.common.NumUtil;
 
 class DumpLinuxOSInfo extends SubstrateDiagnostics.DiagnosticThunk {
     private static final CGlobalData<CCharPointer> MAX_THREADS_PATH = CGlobalDataFactory.createCString("/proc/sys/kernel/threads-max");
@@ -82,7 +84,7 @@ class DumpLinuxOSInfo extends SubstrateDiagnostics.DiagnosticThunk {
         try {
             int bufferSize = 64;
             CCharPointer buffer = StackValue.get(bufferSize);
-            long readBytes = fs.read(fd, (Pointer) buffer, WordFactory.unsigned(bufferSize));
+            long readBytes = fs.read(fd, (Pointer) buffer, Word.unsigned(bufferSize));
             int length = countLineBytes(buffer, NumUtil.safeToInt(readBytes));
             log.string(buffer, length);
         } finally {
@@ -104,6 +106,8 @@ class DumpLinuxOSInfo extends SubstrateDiagnostics.DiagnosticThunk {
 class DumpLinuxOSInfoFeature implements InternalFeature {
     @Override
     public void afterRegistration(AfterRegistrationAccess access) {
-        DiagnosticThunkRegistry.singleton().addAfter(new DumpLinuxOSInfo(), SubstrateDiagnostics.DumpMachineInfo.class);
+        if (!SubstrateOptions.AsyncSignalSafeDiagnostics.getValue()) {
+            DiagnosticThunkRegistry.singleton().addAfter(new DumpLinuxOSInfo(), SubstrateDiagnostics.DumpMachineInfo.class);
+        }
     }
 }

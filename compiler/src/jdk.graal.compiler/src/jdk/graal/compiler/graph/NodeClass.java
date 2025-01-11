@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2011, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -70,8 +70,9 @@ import jdk.graal.compiler.nodeinfo.NodeCycles;
 import jdk.graal.compiler.nodeinfo.NodeInfo;
 import jdk.graal.compiler.nodeinfo.NodeSize;
 import jdk.graal.compiler.nodeinfo.Verbosity;
-import jdk.graal.compiler.serviceprovider.GraalUnsafeAccess;
-import sun.misc.Unsafe;
+import jdk.internal.misc.Unsafe;
+import org.graalvm.nativeimage.Platform;
+import org.graalvm.nativeimage.Platforms;
 
 /**
  * Metadata for every {@link Node} type. The metadata includes:
@@ -83,7 +84,7 @@ import sun.misc.Unsafe;
  */
 public final class NodeClass<T> extends FieldIntrospection<T> {
 
-    private static final Unsafe UNSAFE = GraalUnsafeAccess.getUnsafe();
+    private static final Unsafe UNSAFE = Unsafe.getUnsafe();
     // Timers for creation of a NodeClass instance
     private static final TimerKey Init_FieldScanning = DebugContext.timer("NodeClass.Init.FieldScanning");
     private static final TimerKey Init_FieldScanningInner = DebugContext.timer("NodeClass.Init.FieldScanning.Inner");
@@ -98,6 +99,7 @@ public final class NodeClass<T> extends FieldIntrospection<T> {
     public static final long OFFSET_MASK = 0xFC;
     public static final long LIST_MASK = 0x01;
     public static final long NEXT_EDGE = 0x08;
+    private static final int SHORT_INPUT_LIST_THRESHOLD = 3;
 
     @SuppressWarnings("try")
     private static <T extends Annotation> T getAnnotationTimed(AnnotatedElement e, Class<T> annotationClass, DebugContext debug) {
@@ -109,6 +111,7 @@ public final class NodeClass<T> extends FieldIntrospection<T> {
     /**
      * Gets the {@link NodeClass} associated with a given {@link Class}.
      */
+    @Platforms(Platform.HOSTED_ONLY.class)
     public static <T> NodeClass<T> create(Class<T> c) {
         assert getUnchecked(c) == null;
         Class<? super T> superclass = c.getSuperclass();
@@ -120,6 +123,7 @@ public final class NodeClass<T> extends FieldIntrospection<T> {
     }
 
     @SuppressWarnings("unchecked")
+    @Platforms(Platform.HOSTED_ONLY.class)
     private static <T> NodeClass<T> getUnchecked(Class<T> clazz) {
         try {
             Field field = clazz.getDeclaredField("TYPE");
@@ -130,6 +134,7 @@ public final class NodeClass<T> extends FieldIntrospection<T> {
         }
     }
 
+    @Platforms(Platform.HOSTED_ONLY.class)
     public static <T> NodeClass<T> get(Class<T> clazz) {
         NodeClass<T> result = getUnchecked(clazz);
         if (result == null && clazz != NODE_CLASS) {
@@ -169,12 +174,14 @@ public final class NodeClass<T> extends FieldIntrospection<T> {
 
     private final int leafId;
 
+    @Platforms(Platform.HOSTED_ONLY.class)
     public NodeClass(Class<T> clazz, NodeClass<? super T> superNodeClass) {
         this(clazz, superNodeClass, new FieldsScanner.DefaultCalcOffset(), null, 0);
     }
 
     @SuppressWarnings("try")
-    public NodeClass(Class<T> clazz, NodeClass<? super T> superNodeClass, FieldsScanner.CalcOffset calcOffset, int[] presetIterableIds, int presetIterableId) {
+    @Platforms(Platform.HOSTED_ONLY.class)
+    private NodeClass(Class<T> clazz, NodeClass<? super T> superNodeClass, FieldsScanner.CalcOffset calcOffset, int[] presetIterableIds, int presetIterableId) {
         super(clazz);
         DebugContext debug = DebugContext.forCurrentThread();
         this.superNodeClass = superNodeClass;
@@ -312,7 +319,7 @@ public final class NodeClass<T> extends FieldIntrospection<T> {
 
         for (int i = offsets.length - 1; i >= 0; i--) {
             long offset = offsets[i];
-            assert ((offset & 0xFF) == offset) : "field offset too large!";
+            assert ((offset & OFFSET_MASK) == offset) : Assertions.errorMessageContext("field offset too large or has low bits set", offset);
             mask <<= NodeClass.NEXT_EDGE;
             mask |= offset;
             if (i >= directCount) {
@@ -862,6 +869,11 @@ public final class NodeClass<T> extends FieldIntrospection<T> {
     }
 
     static EconomicMap<Node, Node> addGraphDuplicate(final Graph graph, final Graph oldGraph, int estimatedNodeCount, Iterable<? extends Node> nodes, final Graph.DuplicationReplacement replacements) {
+        return addGraphDuplicate(graph, oldGraph, estimatedNodeCount, nodes, replacements, true);
+    }
+
+    static EconomicMap<Node, Node> addGraphDuplicate(final Graph graph, final Graph oldGraph, int estimatedNodeCount, Iterable<? extends Node> nodes, final Graph.DuplicationReplacement replacements,
+                    boolean applyGVN) {
         final EconomicMap<Node, Node> newNodes;
         int denseThreshold = oldGraph.getNodeCount() + oldGraph.getNodesDeletedSinceLastCompression() >> 4;
         if (estimatedNodeCount > denseThreshold) {
@@ -872,7 +884,7 @@ public final class NodeClass<T> extends FieldIntrospection<T> {
             newNodes = EconomicMap.create(Equivalence.IDENTITY);
         }
         graph.beforeNodeDuplication(oldGraph);
-        createNodeDuplicates(graph, nodes, replacements, newNodes);
+        createNodeDuplicates(graph, nodes, replacements, newNodes, applyGVN);
 
         InplaceUpdateClosure replacementClosure = new InplaceUpdateClosure() {
 
@@ -911,7 +923,8 @@ public final class NodeClass<T> extends FieldIntrospection<T> {
         return newNodes;
     }
 
-    private static void createNodeDuplicates(final Graph graph, Iterable<? extends Node> nodes, final Graph.DuplicationReplacement replacements, final EconomicMap<Node, Node> newNodes) {
+    private static void createNodeDuplicates(final Graph graph, Iterable<? extends Node> nodes, final Graph.DuplicationReplacement replacements, final EconomicMap<Node, Node> newNodes,
+                    boolean applyGVN) {
         for (Node node : nodes) {
             if (node != null) {
                 assert !node.isDeleted() : "trying to duplicate deleted node: " + node;
@@ -923,7 +936,7 @@ public final class NodeClass<T> extends FieldIntrospection<T> {
                     assert replacement != null;
                     newNodes.put(node, replacement);
                 } else {
-                    Node newNode = node.clone(graph, WithAllEdges);
+                    Node newNode = node.clone(graph, WithAllEdges, applyGVN);
                     assert newNode.getNodeClass().isLeafNode() || newNode.hasNoUsages() : Assertions.errorMessageContext("newNode", newNode);
                     assert newNode.getClass() == node.getClass() : Assertions.errorMessageContext("newNode", newNode, "node", node);
                     newNodes.put(node, newNode);
@@ -1340,7 +1353,7 @@ public final class NodeClass<T> extends FieldIntrospection<T> {
             if ((myMask & LIST_MASK) == 0) {
                 Node curNode = Edges.getNodeUnsafe(node, offset);
                 if (curNode != null) {
-                    assert curNode.isAlive() : "Successor not alive";
+                    GraalError.guarantee(curNode.isAlive(), "Adding %s to the graph but its successor %s is not alive", node, curNode);
                     node.updatePredecessor(null, curNode);
                 }
             } else {
@@ -1356,7 +1369,7 @@ public final class NodeClass<T> extends FieldIntrospection<T> {
             for (int i = 0; i < list.size(); ++i) {
                 Node curNode = list.get(i);
                 if (curNode != null) {
-                    assert curNode.isAlive() : "Successor not alive";
+                    GraalError.guarantee(curNode.isAlive(), "Adding %s to the graph but its successor %s is not alive", node, curNode);
                     node.updatePredecessor(null, curNode);
                 }
             }
@@ -1419,7 +1432,7 @@ public final class NodeClass<T> extends FieldIntrospection<T> {
             if ((myMask & LIST_MASK) == 0) {
                 Node curNode = Edges.getNodeUnsafe(node, offset);
                 if (curNode != null) {
-                    assert curNode.isAlive() : "Input " + curNode + " of node " + node + " is not alive";
+                    GraalError.guarantee(curNode.isAlive(), "Adding %s to the graph but its input %s is not alive", node, curNode);
                     curNode.addUsage(node);
                 }
             } else {
@@ -1435,7 +1448,7 @@ public final class NodeClass<T> extends FieldIntrospection<T> {
             for (int i = 0; i < list.size(); ++i) {
                 Node curNode = list.get(i);
                 if (curNode != null) {
-                    assert curNode.isAlive() : "Input not alive " + curNode;
+                    GraalError.guarantee(curNode.isAlive(), "Adding %s to the graph but its input %s is not alive", node, curNode);
                     curNode.addUsage(node);
                 }
             }
@@ -1465,6 +1478,11 @@ public final class NodeClass<T> extends FieldIntrospection<T> {
     private static void unregisterAtInputsAsUsageHelper(Node node, long offset) {
         NodeList<Node> list = Edges.getNodeListUnsafe(node, offset);
         if (list != null) {
+            if (list.size() > SHORT_INPUT_LIST_THRESHOLD) {
+                // Fast path for longer input lists
+                unregisterAtInputsAsUsageHelperMany(node, list);
+                return;
+            }
             for (int i = 0; i < list.size(); ++i) {
                 Node curNode = list.get(i);
                 if (curNode != null) {
@@ -1476,5 +1494,78 @@ public final class NodeClass<T> extends FieldIntrospection<T> {
             }
             list.clearWithoutUpdate();
         }
+    }
+
+    /**
+     * Optimized version of {@link #unregisterAtInputsAsUsageHelper} that is faster for nodes that
+     * have many input edges leading to the same value node.
+     * <p>
+     * Removes batches of the same input value at once, in order to reduce repeated traversals of
+     * potentially long usage lists. This allows faster clearing of nodes with many input edges to
+     * the same value, i.e., the usage list of one input node may include the same usage many times,
+     * and removing each occurrence of this usage one by one can be slow if the input value has many
+     * usages in the graph (as is commonly the case with constant nodes, like null).
+     * <p>
+     * For example, considering a node with 6 inputs like this:
+     *
+     * <pre>
+     *                         |Other|
+     * C(null) C(null) C(null)    |    C(null) C(null)
+     *     \      |       |       |       |      /
+     *   +-----------------------------------------+
+     *   |   usage node (e.g. VirtualObjectState)  |
+     *   +-----------------------------------------+
+     * </pre>
+     *
+     * We can batch-remove this node from its inputs' usages as follows, depending on
+     * maxOtherEdgesToLookPast (i.e. the maximum number of other input edges to look past):
+     * <ul>
+     * <li>If maxOtherEdgesToLookPast = 0, we consider only consecutive occurrences of the same
+     * input node (here: 3 * null + 1 * other + 2 * null).
+     * <li>If maxOtherEdgesToLookPast = 1, we look past one other input to find more occurrences of
+     * the same input node to be removed at once (here: 5 * null + 1 * other). Note that we need to
+     * null out any input slots that would otherwise be processed again.
+     * </ul>
+     */
+    private static void unregisterAtInputsAsUsageHelperMany(Node node, NodeList<Node> list) {
+        final int maxOtherEdgesToLookPast = 1;
+        int size = list.size();
+        int i = 0; // Avoid checkstyle warning: Control variable 'i' is modified.
+        for (; i < size; i++) {
+            Node curNode = list.get(i);
+            if (curNode != null) {
+                // Find more occurrences of the same input node to remove at once.
+                int sameInputEdges = 1;
+                int otherInputEdges = 0;
+                for (int j = i + 1; j < size && otherInputEdges <= maxOtherEdgesToLookPast; j++) {
+                    Node nextNode = list.get(j);
+                    if (nextNode != null) {
+                        if (nextNode == curNode) {
+                            sameInputEdges++;
+                            if (otherInputEdges != 0) {
+                                // Clear NodeList slot without update.
+                                list.initialize(j, null);
+                            }
+                        } else {
+                            otherInputEdges++;
+                        }
+                    }
+                    if (otherInputEdges == 0) {
+                        /*
+                         * As long as we've only seen the same input node or null, there's no need
+                         * to backtrack from here, so we can advance the outer loop accordingly.
+                         * Otherwise, we'll need to continue from first unprocessed "other" edge
+                         * (already processed edges will have been set to null, and be ignored).
+                         */
+                        i = j;
+                    }
+                }
+                curNode.removeUsageNTimes(node, sameInputEdges);
+                if (curNode.hasNoUsages()) {
+                    node.maybeNotifyZeroUsages(curNode);
+                }
+            }
+        }
+        list.clearWithoutUpdate();
     }
 }

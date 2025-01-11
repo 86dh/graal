@@ -24,21 +24,34 @@
  */
 package com.oracle.svm.core.configure;
 
+import static com.oracle.svm.core.configure.ConfigurationParser.JNI_KEY;
+import static com.oracle.svm.core.configure.ConfigurationParser.REFLECTION_KEY;
+import static com.oracle.svm.core.configure.ConfigurationParser.RESOURCES_KEY;
+import static com.oracle.svm.core.configure.ConfigurationParser.SERIALIZATION_KEY;
+
 import java.util.Arrays;
 
 public enum ConfigurationFile {
-    DYNAMIC_PROXY("proxy", true),
-    RESOURCES("resource", true),
-    JNI("jni", true),
-    FOREIGN("foreign", false),
-    REFLECTION("reflect", true),
-    SERIALIZATION("serialization", true),
-    SERIALIZATION_DENY("serialization-deny", false),
-    PREDEFINED_CLASSES_NAME("predefined-classes", true);
+    /* Combined file */
+    REACHABILITY_METADATA("reachability-metadata", null, true, false),
+    /* Main metadata categories (order matters) */
+    REFLECTION("reflect", REFLECTION_KEY, true, true),
+    RESOURCES("resource", RESOURCES_KEY, true, true),
+    SERIALIZATION("serialization", SERIALIZATION_KEY, true, true),
+    JNI("jni", JNI_KEY, true, true),
+    /* Deprecated metadata categories */
+    DYNAMIC_PROXY("proxy", null, true, false),
+    PREDEFINED_CLASSES_NAME("predefined-classes", null, true, false),
+    /* Non-metadata categories */
+    FOREIGN("foreign", null, false, false),
+    SERIALIZATION_DENY("serialization-deny", null, false, false);
 
-    public static final String DEFAULT_FILE_NAME_SUFFIX = "-config.json";
+    public static final String LEGACY_FILE_NAME_SUFFIX = "-config.json";
+    public static final String COMBINED_FILE_NAME_SUFFIX = ".json";
     private final String name;
+    private final String fieldName;
     private final boolean canAgentGenerate;
+    private final boolean inCombinedFile;
 
     public static final String LOCK_FILE_NAME = ".lock";
     public static final String PREDEFINED_CLASSES_AGENT_EXTRACTED_SUBDIR = "agent-extracted-predefined-classes";
@@ -46,18 +59,25 @@ public enum ConfigurationFile {
     public static final String PARTIAL_CONFIGURATION_WITH_ORIGINS = "partial-config-with-origins.json";
 
     private static final ConfigurationFile[] agentGeneratedFiles = computeAgentGeneratedFiles();
+    private static final ConfigurationFile[] combinedFileConfigurations = computeCombinedFileConfigurations();
 
-    ConfigurationFile(String name, boolean canAgentGenerate) {
+    ConfigurationFile(String name, String fieldName, boolean canAgentGenerate, boolean inCombinedFile) {
         this.name = name;
+        this.fieldName = fieldName;
         this.canAgentGenerate = canAgentGenerate;
+        this.inCombinedFile = inCombinedFile;
     }
 
     public String getName() {
         return name;
     }
 
+    public String getFieldName() {
+        return fieldName;
+    }
+
     public String getFileName() {
-        return name + DEFAULT_FILE_NAME_SUFFIX;
+        return name + (this == REACHABILITY_METADATA ? COMBINED_FILE_NAME_SUFFIX : LEGACY_FILE_NAME_SUFFIX);
     }
 
     public String getFileName(String suffix) {
@@ -65,7 +85,7 @@ public enum ConfigurationFile {
     }
 
     public boolean canBeGeneratedByAgent() {
-        return canAgentGenerate;
+        return canAgentGenerate && this != REACHABILITY_METADATA;
     }
 
     public static ConfigurationFile getByName(String name) {
@@ -82,6 +102,14 @@ public enum ConfigurationFile {
     }
 
     private static ConfigurationFile[] computeAgentGeneratedFiles() {
-        return Arrays.stream(values()).filter(ConfigurationFile::canBeGeneratedByAgent).toArray(ConfigurationFile[]::new);
+        return Arrays.stream(values()).filter(f -> f.canBeGeneratedByAgent()).toArray(ConfigurationFile[]::new);
+    }
+
+    public static ConfigurationFile[] combinedFileConfigurations() {
+        return combinedFileConfigurations;
+    }
+
+    private static ConfigurationFile[] computeCombinedFileConfigurations() {
+        return Arrays.stream(values()).filter(f -> f.inCombinedFile).toArray(ConfigurationFile[]::new);
     }
 }

@@ -27,12 +27,10 @@ package com.oracle.svm.core.code;
 import java.util.ArrayList;
 import java.util.List;
 
-import jdk.graal.compiler.code.CompilationResult;
-import jdk.graal.compiler.debug.DebugContext;
+import jdk.graal.compiler.word.Word;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
 import org.graalvm.word.Pointer;
-import org.graalvm.word.WordFactory;
 
 import com.oracle.svm.core.Uninterruptible;
 import com.oracle.svm.core.c.NonmovableArray;
@@ -40,6 +38,10 @@ import com.oracle.svm.core.c.NonmovableArrays;
 import com.oracle.svm.core.code.InstalledCodeObserver.InstalledCodeObserverHandle;
 import com.oracle.svm.core.feature.AutomaticallyRegisteredImageSingleton;
 import com.oracle.svm.core.meta.SharedMethod;
+import com.oracle.svm.core.nmt.NmtCategory;
+
+import jdk.graal.compiler.code.CompilationResult;
+import jdk.graal.compiler.debug.DebugContext;
 
 @AutomaticallyRegisteredImageSingleton
 public final class InstalledCodeObserverSupport {
@@ -74,7 +76,7 @@ public final class InstalledCodeObserverSupport {
         if (observers.length == 0) {
             return NonmovableArrays.nullArray();
         }
-        NonmovableArray<InstalledCodeObserverHandle> observerHandles = NonmovableArrays.createWordArray(observers.length);
+        NonmovableArray<InstalledCodeObserverHandle> observerHandles = NonmovableArrays.createWordArray(observers.length, NmtCategory.Code);
         for (int i = 0; i < observers.length; i++) {
             InstalledCodeObserverHandle handle = observers[i].install();
             NonmovableArrays.setWord(observerHandles, i, handle);
@@ -127,7 +129,7 @@ public final class InstalledCodeObserverSupport {
                 InstalledCodeObserverHandle handle = NonmovableArrays.getWord(observerHandles, i);
                 if (handle.isNonNull()) {
                     getAccessor(handle).releaseOnTearDown(handle);
-                    NonmovableArrays.setWord(observerHandles, i, WordFactory.nullPointer());
+                    NonmovableArrays.setWord(observerHandles, i, Word.nullPointer());
                 }
             }
         }

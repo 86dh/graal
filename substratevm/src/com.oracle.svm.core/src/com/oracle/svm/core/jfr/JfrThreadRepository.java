@@ -24,11 +24,11 @@
  */
 package com.oracle.svm.core.jfr;
 
+import jdk.graal.compiler.word.Word;
 import org.graalvm.nativeimage.IsolateThread;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
 import org.graalvm.nativeimage.StackValue;
-import org.graalvm.word.WordFactory;
 
 import com.oracle.svm.core.Uninterruptible;
 import com.oracle.svm.core.jdk.UninterruptibleUtils;
@@ -39,6 +39,7 @@ import com.oracle.svm.core.locks.VMMutex;
 import com.oracle.svm.core.thread.JavaLangThreadGroupSubstitutions;
 import com.oracle.svm.core.thread.JavaThreads;
 import com.oracle.svm.core.thread.PlatformThreads;
+import com.oracle.svm.core.thread.Target_java_lang_Thread;
 import com.oracle.svm.core.thread.VMOperation;
 import com.oracle.svm.core.thread.VMThreads;
 
@@ -78,6 +79,10 @@ public final class JfrThreadRepository implements JfrRepository {
     public void registerRunningThreads() {
         assert VMOperation.isInProgressAtSafepoint();
         assert SubstrateJVM.get().isRecording();
+
+        /* Register the virtual thread group unconditionally. */
+        long virtualThreadGroupId = registerThreadGroup0(Target_java_lang_Thread.virtualThreadGroup());
+        assert virtualThreadGroupId == VIRTUAL_THREAD_GROUP_ID;
 
         for (IsolateThread isolateThread = VMThreads.firstThread(); isolateThread.isNonNull(); isolateThread = VMThreads.nextThread(isolateThread)) {
             /*
@@ -302,10 +307,10 @@ public final class JfrThreadRepository implements JfrRepository {
             unflushedThreadGroupCount = 0;
 
             JfrBufferAccess.free(threadBuffer);
-            threadBuffer = WordFactory.nullPointer();
+            threadBuffer = Word.nullPointer();
 
             JfrBufferAccess.free(threadGroupBuffer);
-            threadGroupBuffer = WordFactory.nullPointer();
+            threadGroupBuffer = Word.nullPointer();
         }
     }
 }

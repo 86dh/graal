@@ -73,7 +73,6 @@ import jdk.graal.compiler.debug.DebugContext.Builder;
 import jdk.graal.compiler.debug.GraalError;
 import jdk.graal.compiler.graph.Node;
 import jdk.graal.compiler.graph.NodeClass;
-import jdk.graal.compiler.java.GraphBuilderPhase;
 import jdk.graal.compiler.nodeinfo.NodeInfo;
 import jdk.graal.compiler.nodes.FrameState;
 import jdk.graal.compiler.nodes.PhiNode;
@@ -85,6 +84,7 @@ import jdk.graal.compiler.nodes.graphbuilderconf.GraphBuilderConfiguration.Plugi
 import jdk.graal.compiler.nodes.graphbuilderconf.GraphBuilderContext;
 import jdk.graal.compiler.nodes.graphbuilderconf.InvocationPlugins;
 import jdk.graal.compiler.nodes.java.LoadFieldNode;
+import jdk.graal.compiler.nodes.java.MethodCallTargetNode;
 import jdk.graal.compiler.nodes.memory.MemoryKill;
 import jdk.graal.compiler.nodes.memory.MultiMemoryKill;
 import jdk.graal.compiler.nodes.memory.SingleMemoryKill;
@@ -102,7 +102,9 @@ import jdk.graal.compiler.phases.contract.VerifyNodeCosts;
 import jdk.graal.compiler.phases.tiers.HighTierContext;
 import jdk.graal.compiler.phases.util.Providers;
 import jdk.graal.compiler.runtime.RuntimeProvider;
+import jdk.graal.compiler.serviceprovider.GraalServices;
 import jdk.graal.compiler.test.AddExports;
+import jdk.graal.compiler.test.SubprocessUtil;
 import jdk.internal.misc.Unsafe;
 import jdk.vm.ci.code.BailoutException;
 import jdk.vm.ci.code.Register;
@@ -116,6 +118,7 @@ import jdk.vm.ci.meta.MetaAccessProvider;
 import jdk.vm.ci.meta.ResolvedJavaField;
 import jdk.vm.ci.meta.ResolvedJavaMethod;
 import jdk.vm.ci.meta.ResolvedJavaType;
+import jdk.vm.ci.meta.SpeculationLog;
 import jdk.vm.ci.meta.Value;
 
 /**
@@ -140,6 +143,10 @@ public class CheckGraalInvariants extends GraalCompilerTest {
         }
 
         return true;
+    }
+
+    public static void main(String[] args) {
+
     }
 
     public static String relativeFileName(String absolutePath) {
@@ -191,6 +198,13 @@ public class CheckGraalInvariants extends GraalCompilerTest {
             return true;
         }
 
+        public void verifyCurrentTimeMillis(MetaAccessProvider meta, MethodCallTargetNode t, ResolvedJavaType declaringClass) {
+            final ResolvedJavaType services = meta.lookupJavaType(GraalServices.class);
+            if (!declaringClass.equals(services)) {
+                throw new VerificationError(t, "Should use System.nanoTime() for measuring elapsed time or GraalServices.milliTimeStamp() for the time since the epoch");
+            }
+        }
+
         /**
          * Makes edits to the list of verifiers to be run.
          */
@@ -202,18 +216,9 @@ public class CheckGraalInvariants extends GraalCompilerTest {
          * Determines if {@code option} should be checked to ensure it has at least one usage.
          */
         public boolean shouldCheckUsage(OptionDescriptor option) {
-            Class<?> declaringClass = option.getDeclaringClass();
-            if (declaringClass.getName().equals("jdk.graal.compiler.truffle.TruffleCompilerOptions")) {
-                /*
-                 * These options are deprecated and will be removed in GraalVM 20.2.0. The
-                 * TruffleIntrinsifyFrameAccess option has no replacement and is unused.
-                 */
-                return false;
-            }
             if (option.getOptionKey().getClass().isAnonymousClass()) {
                 /*
-                 * Probably a derived option such as
-                 * jdk.graal.compiler.debug.DebugOptions.PrintGraphFile.
+                 * A derived option.
                  */
                 return false;
             }
@@ -228,6 +233,7 @@ public class CheckGraalInvariants extends GraalCompilerTest {
 
     @Test
     public void test() {
+        Assume.assumeFalse("JaCoCo causes failure", SubprocessUtil.isJaCoCoAttached()); // GR-50672
         assumeManagementLibraryIsLoadable();
         runTest(new InvariantsTool());
     }
@@ -242,7 +248,7 @@ public class CheckGraalInvariants extends GraalCompilerTest {
         Plugins plugins = new Plugins(new InvocationPlugins());
         plugins.setClassInitializationPlugin(new DoNotInitializeClassInitializationPlugin());
         GraphBuilderConfiguration config = GraphBuilderConfiguration.getDefault(plugins).withEagerResolving(true).withUnresolvedIsError(true);
-        graphBuilderSuite.appendPhase(new GraphBuilderPhase(config));
+        graphBuilderSuite.appendPhase(new TestGraphBuilderPhase(config));
         HighTierContext context = new HighTierContext(providers, graphBuilderSuite, OptimisticOptimizations.NONE);
 
         Assume.assumeTrue(VerifyPhase.class.desiredAssertionStatus());
@@ -306,7 +312,7 @@ public class CheckGraalInvariants extends GraalCompilerTest {
         OptionValues options = getInitialOptions();
         CompilerThreadFactory factory = new CompilerThreadFactory("CheckInvariantsThread");
         int availableProcessors = Runtime.getRuntime().availableProcessors();
-        ThreadPoolExecutor executor = new ThreadPoolExecutor(availableProcessors, availableProcessors, 0L, TimeUnit.MILLISECONDS, new LinkedBlockingQueue<Runnable>(), factory);
+        ThreadPoolExecutor executor = new ThreadPoolExecutor(availableProcessors, availableProcessors, 0L, TimeUnit.MILLISECONDS, new LinkedBlockingQueue<>(), factory);
 
         List<String> errors = Collections.synchronizedList(new ArrayList<>());
 
@@ -324,11 +330,14 @@ public class CheckGraalInvariants extends GraalCompilerTest {
         verifiers.add(new VerifyUsageWithEquals(LIRKind.class));
         verifiers.add(new VerifyUsageWithEquals(ArithmeticOpTable.class));
         verifiers.add(new VerifyUsageWithEquals(ArithmeticOpTable.Op.class));
+        verifiers.add(new VerifyUsageWithEquals(SpeculationLog.Speculation.class, SpeculationLog.NO_SPECULATION));
 
         verifiers.add(new VerifySharedConstantEmptyArray());
         verifiers.add(new VerifyDebugUsage());
         verifiers.add(new VerifyVirtualizableUsage());
         verifiers.add(new VerifyUpdateUsages());
+        verifiers.add(new VerifyLibGraalContextChecks());
+        verifiers.add(new VerifyWordFactoryUsage());
         verifiers.add(new VerifyBailoutUsage());
         verifiers.add(new VerifySystemPropertyUsage());
         verifiers.add(new VerifyInstanceOfUsage());
@@ -344,6 +353,12 @@ public class CheckGraalInvariants extends GraalCompilerTest {
         verifiers.add(new VerifyPluginFrameState());
         verifiers.add(new VerifyGraphUniqueUsages());
         verifiers.add(new VerifyEndlessLoops());
+        verifiers.add(new VerifyPhaseNoDirectRecursion());
+        verifiers.add(new VerifyStringCaseUsage());
+        verifiers.add(new VerifyMathAbs());
+        verifiers.add(new VerifyLoopInfo());
+        verifiers.add(new VerifyRuntimeVersionFeature());
+        verifiers.add(new VerifyGuardsStageUsages());
         VerifyAssertionUsage assertionUsages = null;
         boolean checkAssertions = tool.checkAssertions();
 
@@ -358,6 +373,8 @@ public class CheckGraalInvariants extends GraalCompilerTest {
         if (tool.shouldVerifyFoldableMethods()) {
             verifiers.add(foldableMethodsVerifier);
         }
+
+        verifiers.add(new VerifyCurrentTimeMillisUsage(tool));
 
         tool.updateVerifiers(verifiers);
 

@@ -59,10 +59,16 @@ public final class DynamicHubCompanion {
     private Constructor<?> cachedConstructor;
     private Class<?> newInstanceCallerCache;
     private Object jfrEventConfiguration;
+    private boolean canUnsafeAllocate;
 
     @Platforms(Platform.HOSTED_ONLY.class)
     DynamicHubCompanion(Class<?> hostedJavaClass, ClassLoader classLoader) {
         this.classLoader = PredefinedClassesSupport.isPredefined(hostedJavaClass) ? NO_CLASS_LOADER : classLoader;
+    }
+
+    DynamicHubCompanion(ClassLoader classLoader) {
+        assert RuntimeClassLoading.isSupported();
+        this.classLoader = classLoader;
     }
 
     String getPackageName(DynamicHub hub) {
@@ -140,5 +146,13 @@ public final class DynamicHubCompanion {
 
     public Object getJfrEventConfiguration() {
         return jfrEventConfiguration;
+    }
+
+    public boolean canUnsafeAllocate() {
+        return canUnsafeAllocate;
+    }
+
+    public void setUnsafeAllocate() {
+        canUnsafeAllocate = true;
     }
 }

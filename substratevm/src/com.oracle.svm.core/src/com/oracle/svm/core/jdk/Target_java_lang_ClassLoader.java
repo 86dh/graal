@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -27,11 +27,10 @@ package com.oracle.svm.core.jdk;
 import java.io.File;
 import java.net.URL;
 import java.security.ProtectionDomain;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Enumeration;
-import java.util.HashMap;
 import java.util.Set;
-import java.util.Vector;
 import java.util.WeakHashMap;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Stream;
@@ -43,12 +42,15 @@ import com.oracle.svm.core.annotate.RecomputeFieldValue;
 import com.oracle.svm.core.annotate.RecomputeFieldValue.Kind;
 import com.oracle.svm.core.annotate.Substitute;
 import com.oracle.svm.core.annotate.TargetClass;
-import com.oracle.svm.core.fieldvaluetransformer.FieldValueTransformerWithAvailability;
+import com.oracle.svm.core.annotate.TargetElement;
 import com.oracle.svm.core.hub.ClassForNameSupport;
 import com.oracle.svm.core.hub.PredefinedClassesSupport;
-import com.oracle.svm.core.util.LazyFinalReference;
+import com.oracle.svm.core.hub.RuntimeClassLoading;
+import com.oracle.svm.core.option.SubstrateOptionsParser;
 import com.oracle.svm.core.util.VMError;
 
+import jdk.graal.compiler.java.LambdaUtils;
+import jdk.graal.compiler.util.Digest;
 import jdk.internal.loader.ClassLoaderValue;
 import jdk.internal.loader.NativeLibrary;
 
@@ -66,17 +68,10 @@ public final class Target_java_lang_ClassLoader {
      * invoked by the VM to record every loaded class with this loader".
      */
     @Alias @RecomputeFieldValue(kind = Kind.Reset)//
-    private Vector<Class<?>> classes;
+    private ArrayList<Class<?>> classes;
 
     @Alias @RecomputeFieldValue(kind = Kind.NewInstanceWhenNotNull, declClass = ConcurrentHashMap.class)//
     private ConcurrentHashMap<String, Object> parallelLockMap;
-
-    /**
-     * Recompute ClassLoader.packages; See {@link ClassLoaderSupport} for explanation on why this
-     * information must be reset.
-     */
-    @Alias @RecomputeFieldValue(kind = Kind.Custom, declClass = PackageFieldTransformer.class)//
-    private ConcurrentHashMap<String, Package> packages;
 
     @Alias //
     private static ClassLoader scl;
@@ -156,6 +151,7 @@ public final class Target_java_lang_ClassLoader {
 
     @Substitute
     @SuppressWarnings("unused")
+    @TargetElement(onlyWith = JDK21OrEarlier.class)
     static void checkClassLoaderPermission(ClassLoader cl, Class<?> caller) {
     }
 
@@ -204,11 +200,6 @@ public final class Target_java_lang_ClassLoader {
     @Alias
     native Stream<Package> packages();
 
-    @SuppressWarnings("static-method")
-    @Substitute
-    public Target_java_lang_Module getUnnamedModule() {
-        return ClassLoaderUtil.unnamedModuleReference.get();
-    }
     /*
      * The assertion status of classes is fixed at image build time because it is baked into the AOT
      * compiled code. All methods that modify the assertion status are substituted to throw an
@@ -255,9 +246,10 @@ public final class Target_java_lang_ClassLoader {
     private static native void registerNatives();
 
     /**
-     * Ignores {@code loader}, as {@link Target_java_lang_ClassLoader#loadLibrary}.
+     * Ignores {@code loader}, like {@link Target_java_lang_ClassLoader#loadLibrary} does.
      */
     @Substitute
+    @TargetElement(onlyWith = JDK21OrEarlier.class)
     private static long findNative(@SuppressWarnings("unused") ClassLoader loader, String entryName) {
         return NativeLibrarySupport.singleton().findSymbol(entryName).rawValue();
     }
@@ -265,39 +257,40 @@ public final class Target_java_lang_ClassLoader {
     @Substitute
     @SuppressWarnings({"unused", "static-method"})
     Class<?> defineClass(byte[] b, int off, int len) throws ClassFormatError {
-        return PredefinedClassesSupport.loadClass(SubstrateUtil.cast(this, ClassLoader.class), null, b, off, len, null);
+        return defineClass(null, b, off, len);
     }
 
     @Substitute
     @SuppressWarnings({"unused", "static-method"})
     Class<?> defineClass(String name, byte[] b, int off, int len) throws ClassFormatError {
-        return PredefinedClassesSupport.loadClass(SubstrateUtil.cast(this, ClassLoader.class), name, b, off, len, null);
+        return defineClass(name, b, off, len, null);
     }
 
     @Substitute
     @SuppressWarnings({"unused", "static-method"})
     private Class<?> defineClass(String name, byte[] b, int off, int len, ProtectionDomain protectionDomain) {
-        return PredefinedClassesSupport.loadClass(SubstrateUtil.cast(this, ClassLoader.class), name, b, off, len, protectionDomain);
+        return ClassLoaderHelper.defineClass(SubstrateUtil.cast(this, ClassLoader.class), name, b, off, len, protectionDomain);
     }
 
     @Substitute
     @SuppressWarnings({"unused", "static-method"})
     private Class<?> defineClass(String name, java.nio.ByteBuffer b, ProtectionDomain protectionDomain) {
-        if (!PredefinedClassesSupport.hasBytecodeClasses()) {
-            throw PredefinedClassesSupport.throwNoBytecodeClasses();
+        // only bother extracting the bytes if it has a chance to work
+        if (PredefinedClassesSupport.hasBytecodeClasses() || RuntimeClassLoading.isSupported()) {
+            byte[] array;
+            int off;
+            int len = b.remaining();
+            if (b.hasArray()) {
+                array = b.array();
+                off = b.position() + b.arrayOffset();
+            } else {
+                array = new byte[len];
+                b.get(array);
+                off = 0;
+            }
+            return ClassLoaderHelper.defineClass(SubstrateUtil.cast(this, ClassLoader.class), name, array, off, len, null);
         }
-        byte[] array;
-        int off;
-        int len = b.remaining();
-        if (b.hasArray()) {
-            array = b.array();
-            off = b.position() + b.arrayOffset();
-        } else {
-            array = new byte[len];
-            b.get(array);
-            off = 0;
-        }
-        return PredefinedClassesSupport.loadClass(SubstrateUtil.cast(this, ClassLoader.class), name, array, off, len, null);
+        throw PredefinedClassesSupport.throwNoBytecodeClasses(name);
     }
 
     @Substitute
@@ -305,14 +298,9 @@ public final class Target_java_lang_ClassLoader {
         // All classes are already linked at runtime.
     }
 
-    /**
-     * TODO: This substitution should be reverted to a @Delete annotation once GR-38801 is fixed.
-     */
-    @Substitute
+    @Delete
     @SuppressWarnings("unused")
-    private static Class<?> defineClass1(ClassLoader loader, String name, byte[] b, int off, int len, ProtectionDomain pd, String source) {
-        throw VMError.unsupportedFeature("Defining classes at runtime is not supported.");
-    }
+    private static native Class<?> defineClass1(ClassLoader loader, String name, byte[] b, int off, int len, ProtectionDomain pd, String source);
 
     @Delete
     private static native Class<?> defineClass2(ClassLoader loader, String name, java.nio.ByteBuffer b, int off, int len, ProtectionDomain pd, String source);
@@ -320,7 +308,11 @@ public final class Target_java_lang_ClassLoader {
     @Substitute
     @SuppressWarnings("unused")
     private static Class<?> defineClass0(ClassLoader loader, Class<?> lookup, String name, byte[] b, int off, int len, ProtectionDomain pd, boolean initialize, int flags, Object classData) {
-        throw VMError.unsupportedFeature("Defining hidden classes at runtime is not supported.");
+        String actualName = name;
+        if (LambdaUtils.isLambdaClassName(name)) {
+            actualName += Digest.digest(b);
+        }
+        return PredefinedClassesSupport.loadClass(loader, actualName.replace('/', '.'), b, off, b.length, null);
     }
 
     // JDK-8265605
@@ -331,38 +323,19 @@ public final class Target_java_lang_ClassLoader {
     private static native Target_java_lang_AssertionStatusDirectives retrieveDirectives();
 }
 
+final class ClassLoaderHelper {
+    private static final String ERROR_MSG = SubstrateOptionsParser.commandArgument(RuntimeClassLoading.Options.SupportRuntimeClassLoading, "+") + " is not yet supported.";
+
+    public static Class<?> defineClass(ClassLoader loader, String name, byte[] b, int off, int len, ProtectionDomain protectionDomain) {
+        if (PredefinedClassesSupport.hasBytecodeClasses()) {
+            return PredefinedClassesSupport.loadClass(loader, name, b, off, len, protectionDomain);
+        }
+        throw VMError.unimplemented(ERROR_MSG);
+    }
+}
+
 @TargetClass(className = "java.lang.AssertionStatusDirectives") //
 final class Target_java_lang_AssertionStatusDirectives {
-}
-
-class PackageFieldTransformer implements FieldValueTransformerWithAvailability {
-
-    @Override
-    public ValueAvailability valueAvailability() {
-        return ValueAvailability.AfterAnalysis;
-    }
-
-    @Override
-    public Object transform(Object receiver, Object originalValue) {
-        assert receiver instanceof ClassLoader;
-
-        /* JDK9+ stores packages in a ConcurrentHashMap, while 8 and before use a HashMap. */
-        boolean useConcurrentHashMap = originalValue instanceof ConcurrentHashMap;
-
-        /* Retrieving initial package state for this class loader. */
-        ConcurrentHashMap<String, Package> packages = ClassLoaderSupport.getRegisteredPackages((ClassLoader) receiver);
-        if (packages == null) {
-            /* No package state available - have to create clean state. */
-            return useConcurrentHashMap ? new ConcurrentHashMap<String, Package>() : new HashMap<String, Package>();
-        } else {
-            return useConcurrentHashMap ? packages : new HashMap<>(packages);
-        }
-    }
-}
-
-final class ClassLoaderUtil {
-
-    public static final LazyFinalReference<Target_java_lang_Module> unnamedModuleReference = new LazyFinalReference<>(Target_java_lang_Module::new);
 }
 
 @TargetClass(className = "java.lang.ClassLoader", innerClass = "ParallelLoaders")

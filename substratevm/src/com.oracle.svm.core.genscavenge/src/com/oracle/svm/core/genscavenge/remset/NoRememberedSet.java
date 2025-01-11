@@ -26,12 +26,11 @@ package com.oracle.svm.core.genscavenge.remset;
 
 import java.util.List;
 
-import jdk.graal.compiler.nodes.gc.BarrierSet;
+import jdk.graal.compiler.word.Word;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
 import org.graalvm.nativeimage.c.struct.SizeOf;
 import org.graalvm.word.UnsignedWord;
-import org.graalvm.word.WordFactory;
 
 import com.oracle.svm.core.AlwaysInline;
 import com.oracle.svm.core.Uninterruptible;
@@ -40,12 +39,13 @@ import com.oracle.svm.core.genscavenge.AlignedHeapChunk.AlignedHeader;
 import com.oracle.svm.core.genscavenge.GreyToBlackObjectVisitor;
 import com.oracle.svm.core.genscavenge.Space;
 import com.oracle.svm.core.genscavenge.UnalignedHeapChunk.UnalignedHeader;
-import com.oracle.svm.core.genscavenge.graal.SubstrateNoBarrierSet;
 import com.oracle.svm.core.image.ImageHeapObject;
 import com.oracle.svm.core.util.HostedByteBufferPointer;
 import com.oracle.svm.core.util.UnsignedUtils;
 import com.oracle.svm.core.util.VMError;
 
+import jdk.graal.compiler.nodes.gc.BarrierSet;
+import jdk.graal.compiler.nodes.gc.NoBarrierSet;
 import jdk.vm.ci.meta.MetaAccessProvider;
 
 /**
@@ -56,20 +56,20 @@ import jdk.vm.ci.meta.MetaAccessProvider;
 public final class NoRememberedSet implements RememberedSet {
     @Override
     public BarrierSet createBarrierSet(MetaAccessProvider metaAccess) {
-        return new SubstrateNoBarrierSet();
+        return new NoBarrierSet();
     }
 
     @Override
     public UnsignedWord getHeaderSizeOfAlignedChunk() {
-        UnsignedWord headerSize = WordFactory.unsigned(SizeOf.get(AlignedHeader.class));
-        UnsignedWord alignment = WordFactory.unsigned(ConfigurationValues.getObjectLayout().getAlignment());
+        UnsignedWord headerSize = Word.unsigned(SizeOf.get(AlignedHeader.class));
+        UnsignedWord alignment = Word.unsigned(ConfigurationValues.getObjectLayout().getAlignment());
         return UnsignedUtils.roundUp(headerSize, alignment);
     }
 
     @Override
     public UnsignedWord getHeaderSizeOfUnalignedChunk() {
-        UnsignedWord headerSize = WordFactory.unsigned(SizeOf.get(UnalignedHeader.class));
-        UnsignedWord alignment = WordFactory.unsigned(ConfigurationValues.getObjectLayout().getAlignment());
+        UnsignedWord headerSize = Word.unsigned(SizeOf.get(UnalignedHeader.class));
+        UnsignedWord alignment = Word.unsigned(ConfigurationValues.getObjectLayout().getAlignment());
         return UnsignedUtils.roundUp(headerSize, alignment);
     }
 
@@ -100,7 +100,7 @@ public final class NoRememberedSet implements RememberedSet {
     @Override
     @AlwaysInline("GC performance")
     @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
-    public void enableRememberedSetForObject(AlignedHeader chunk, Object obj) {
+    public void enableRememberedSetForObject(AlignedHeader chunk, Object obj, UnsignedWord objSize) {
         // Nothing to do.
     }
 
@@ -124,11 +124,13 @@ public final class NoRememberedSet implements RememberedSet {
     }
 
     @Override
+    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     public void dirtyCardForAlignedObject(Object object, boolean verifyOnly) {
         throw VMError.shouldNotReachHereAtRuntime(); // ExcludeFromJacocoGeneratedReport
     }
 
     @Override
+    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     public void dirtyCardForUnalignedObject(Object object, boolean verifyOnly) {
         throw VMError.shouldNotReachHereAtRuntime(); // ExcludeFromJacocoGeneratedReport
     }
@@ -165,6 +167,11 @@ public final class NoRememberedSet implements RememberedSet {
 
     @Override
     public boolean verify(UnalignedHeader firstUnalignedHeapChunk) {
+        return true;
+    }
+
+    @Override
+    public boolean verify(UnalignedHeader firstUnalignedHeapChunk, UnalignedHeader lastUnalignedHeapChunk) {
         return true;
     }
 }

@@ -25,7 +25,7 @@
 package jdk.graal.compiler.hotspot.stubs;
 
 import static jdk.graal.compiler.nodes.graphbuilderconf.IntrinsicContext.CompilationContext.INLINE_AFTER_PARSING;
-import static jdk.vm.ci.services.Services.IS_IN_NATIVE_IMAGE;
+import static org.graalvm.nativeimage.ImageInfo.inImageRuntimeCode;
 
 import jdk.graal.compiler.core.common.CompilationIdentifier;
 import jdk.graal.compiler.debug.Assertions;
@@ -44,7 +44,6 @@ import jdk.graal.compiler.phases.common.DeadCodeEliminationPhase;
 import jdk.graal.compiler.phases.common.inlining.InliningUtil;
 import jdk.graal.compiler.phases.util.Providers;
 import jdk.graal.compiler.replacements.GraphKit;
-import jdk.graal.compiler.word.WordTypes;
 import jdk.vm.ci.meta.ResolvedJavaMethod;
 
 /**
@@ -56,9 +55,9 @@ import jdk.vm.ci.meta.ResolvedJavaMethod;
  */
 public class HotSpotGraphKit extends GraphKit {
 
-    public HotSpotGraphKit(DebugContext debug, ResolvedJavaMethod stubMethod, Providers providers, WordTypes wordTypes, Plugins graphBuilderPlugins, CompilationIdentifier compilationId, String name,
+    public HotSpotGraphKit(DebugContext debug, ResolvedJavaMethod stubMethod, Providers providers, Plugins graphBuilderPlugins, CompilationIdentifier compilationId, String name,
                     boolean trackNodeSourcePosition, boolean recordInlinedMethods) {
-        super(debug, stubMethod, providers, wordTypes, graphBuilderPlugins, compilationId, name, trackNodeSourcePosition, recordInlinedMethods);
+        super(debug, stubMethod, providers, graphBuilderPlugins, compilationId, name, trackNodeSourcePosition, recordInlinedMethods);
     }
 
     /**
@@ -90,7 +89,7 @@ public class HotSpotGraphKit extends GraphKit {
         GraphBuilderConfiguration config = GraphBuilderConfiguration.getSnippetDefault(plugins);
 
         StructuredGraph calleeGraph;
-        if (IS_IN_NATIVE_IMAGE) {
+        if (inImageRuntimeCode()) {
             calleeGraph = getReplacements().getSnippet(method, null, null, null, false, null, invokeNode.getOptions());
         } else {
             calleeGraph = new StructuredGraph.Builder(invokeNode.getOptions(), invokeNode.getDebug()).method(method).trackNodeSourcePosition(

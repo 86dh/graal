@@ -307,9 +307,11 @@ import jdk.vm.ci.meta.JavaMethod;
  */
 public class BciBlockMapping implements JavaMethodContext {
     public static class Options {
-        @Option(help = "Max amount of extra effort to expend handling irreducible loops. " +
-                        "A value <= 1 disables support for irreducible loops.", type = OptionType.Expert)//
+        //@formatter:off
+        @Option(help = "Specifies the maximum amount of extra effort to expend handling irreducible loops. " +
+                       "A value <= 1 disables support for irreducible loops.", type = OptionType.Expert)//
         public static final OptionKey<Double> MaxDuplicationFactor = new OptionKey<>(2.0);
+        //@formatter:on
     }
 
     protected static final int UNASSIGNED_ID = -1;
@@ -415,7 +417,10 @@ public class BciBlockMapping implements JavaMethodContext {
                 if (block.jsrData != null) {
                     block.jsrData = block.jsrData.copy();
                 }
-                block.successors = new ArrayList<>(successors);
+                block.successors = new ArrayList<>();
+                for (var sux : successors) {
+                    block.addSuccessor(sux);
+                }
                 block.loops = (BitSet) block.loops.clone();
                 return block;
             } catch (CloneNotSupportedException e) {
@@ -429,7 +434,10 @@ public class BciBlockMapping implements JavaMethodContext {
                 if (block.jsrData != null) {
                     throw new PermanentBailoutException("Can not duplicate block with JSR data");
                 }
-                block.successors = new ArrayList<>(successors);
+                block.successors = new ArrayList<>();
+                for (var sux : successors) {
+                    block.addSuccessor(sux);
+                }
                 block.loops = new BitSet();
                 block.loopId = 0;
                 block.id = UNASSIGNED_ID;
@@ -641,14 +649,16 @@ public class BciBlockMapping implements JavaMethodContext {
     public static class ExceptionDispatchBlock extends BciBlock {
         public final ExceptionHandler handler;
         public final int deoptBci;
+        public final int handlerID;
 
         /**
          * Constructor for a normal dispatcher.
          */
-        protected ExceptionDispatchBlock(ExceptionHandler handler, int deoptBci) {
+        protected ExceptionDispatchBlock(ExceptionHandler handler, int handlerID, int deoptBci) {
             super(handler.getHandlerBCI(), handler.getHandlerBCI());
             this.deoptBci = deoptBci;
             this.handler = handler;
+            this.handlerID = handlerID;
         }
 
         /**
@@ -658,6 +668,7 @@ public class BciBlockMapping implements JavaMethodContext {
             super(deoptBci, deoptBci);
             this.deoptBci = deoptBci;
             this.handler = null;
+            this.handlerID = -1;
         }
 
         @Override
@@ -910,6 +921,7 @@ public class BciBlockMapping implements JavaMethodContext {
                         blocksNotYetAssignedId++;
                     }
                     b.successors.set(i, dup);
+                    dup.predecessorCount++;
 
                     if (duplicates.get(b) != null) {
                         // Patch successor of own duplicate.
@@ -1200,7 +1212,8 @@ public class BciBlockMapping implements JavaMethodContext {
                 case LDC:
                 case LDC_W:
                 case LDC2_W:
-                case MONITORENTER: {
+                case MONITORENTER:
+                case MONITOREXIT: {
                     /*
                      * All bytecodes that can trigger lazy class initialization via a
                      * ClassInitializationPlugin (allocations, static field access) must be listed
@@ -1346,11 +1359,11 @@ public class BciBlockMapping implements JavaMethodContext {
                 case FCMPG:
                 case DCMPL:
                 case DCMPG:
-                case MONITOREXIT:
-                    // All stack manipulation, comparison, conversion and arithmetic operators
-                    // except for idiv and irem can't throw exceptions so the don't need to connect
-                    // exception edges. MONITOREXIT can't throw exceptions in the context of
-                    // compiled code because of the structured locking requirement in the parser.
+                    /*
+                     * All stack manipulation, comparison, conversion and arithmetic operators
+                     * except for idiv and irem can't throw exceptions so the don't need to connect
+                     * exception edges.
+                     */
                     break;
 
                 case WIDE:
@@ -1468,6 +1481,14 @@ public class BciBlockMapping implements JavaMethodContext {
         }
         debug.log("JSR alternatives block %s  sux %s  jsrSux %s  retSux %s  jsrScope %s", block, block.getSuccessors(), block.getJsrSuccessor(), block.getRetSuccessor(), block.getJsrScope());
 
+        if (block.getJsrSuccessor() != null && scope.containsJSREntry(block.getJsrSuccessor())) {
+            /*
+             * Subroutine recursion is not supported; stop creating jsr alternatives. The actual
+             * handling happens when parsing the jsr bytecode. This permits it to be handled either
+             * as a compiler bailout or as an error at run time.
+             */
+            return;
+        }
         if (block.getJsrSuccessor() != null || !scope.isEmpty()) {
             for (int i = 0; i < block.getSuccessorCount(); i++) {
                 BciBlock successor = block.getSuccessor(i);
@@ -1546,7 +1567,7 @@ public class BciBlockMapping implements JavaMethodContext {
                      * We do not reuse exception dispatch blocks, because nested exception handlers
                      * might have problems reasoning about the correct frame state.
                      */
-                    ExceptionDispatchBlock curHandler = new ExceptionDispatchBlock(exceptionHandlers[handlerID], bci);
+                    ExceptionDispatchBlock curHandler = new ExceptionDispatchBlock(exceptionHandlers[handlerID], handlerID, bci);
                     dispatchBlocks++;
                     curHandler.addSuccessor(getHandlerBlock(handlerID));
                     if (lastHandler != null) {

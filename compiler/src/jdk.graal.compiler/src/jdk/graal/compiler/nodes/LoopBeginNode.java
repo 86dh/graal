@@ -33,6 +33,7 @@ import jdk.graal.compiler.debug.CounterKey;
 import jdk.graal.compiler.debug.DebugCloseable;
 import jdk.graal.compiler.debug.DebugContext;
 import jdk.graal.compiler.debug.GraalError;
+import jdk.graal.compiler.graph.Graph;
 import jdk.graal.compiler.graph.IterableNodeType;
 import jdk.graal.compiler.graph.Node;
 import jdk.graal.compiler.graph.NodeClass;
@@ -95,7 +96,7 @@ public final class LoopBeginNode extends AbstractMergeNode implements IterableNo
      *
      * <pre>
      * public static long foo(int start) {
-     *     if (Integer.compareUnsigned(start, 2) < 0) {
+     *     if (Integer.compareUnsigned(start, 2) &lt; 0) {
      *         deoptimize();
      *     }
      *     int i = start;
@@ -127,11 +128,45 @@ public final class LoopBeginNode extends AbstractMergeNode implements IterableNo
         return protectedNonOverflowingUnsigned != null;
     }
 
+    /**
+     * State of the safepoint properties of this loop.
+     */
+    public enum SafepointState {
+        /**
+         * Determines that, for whatever reason, we must never create a safepoint related to this
+         * loop. This includes on the backedge or the loop exit.
+         */
+        MUST_NEVER_SAFEPOINT(false),
+        /**
+         * Determines that the optimizer decided there is no need for a safepoint on any backedge or
+         * loop exit.
+         */
+        OPTIMIZER_DISABLED(false),
+        /**
+         * Determines the safepoint poll should be performed.
+         */
+        ENABLED(true);
+
+        private final boolean canSafepoint;
+
+        SafepointState(boolean canSafepoint) {
+            this.canSafepoint = canSafepoint;
+        }
+
+        private boolean canSafepoint() {
+            return canSafepoint;
+        }
+
+    }
+
     /** See {@link LoopEndNode#canSafepoint} for more information. */
-    boolean canEndsSafepoint;
+    SafepointState loopEndsSafepointState;
+
+    /** Same as {@link #loopEndsSafepointState} but for {@link LoopExitNode}. */
+    SafepointState loopExitsSafepointState;
 
     /** See {@link LoopEndNode#canGuestSafepoint} for more information. */
-    boolean canEndsGuestSafepoint;
+    SafepointState guestLoopEndsSafepointState;
 
     /**
      * A guard that proves that this loop's counter never overflows and wraps around (either in the
@@ -150,15 +185,44 @@ public final class LoopBeginNode extends AbstractMergeNode implements IterableNo
 
     public static final SpeculationReasonGroup LOOP_OVERFLOW_DEOPT = new SpeculationReasonGroup("LoopOverflowDeopt", ResolvedJavaMethod.class, int.class);
 
+    /**
+     * A number based on the {@link Node#getId()} of the original {@link LoopBeginNode} this node
+     * was cloned from. It may additionally encode information about the compressions of a graph. Do
+     * not assume anything about the actual value of this number. The only important data it
+     * preserves is that it encodes information about the original loop begin. This can be used when
+     * comparing two different loop begin nodes if they are both result of a clone operation of the
+     * same loop in the same graph. Only used for debugging and verification purposes. This number
+     * is highly implementation dependent and can change over the course of a graph because of
+     * {@link Graph#maybeCompress()} compression.
+     */
+    @SuppressWarnings("javadoc") private long cloneFromNodeId = -1;
+
     public LoopBeginNode() {
         super(TYPE);
         loopOrigFrequency = 1;
         unswitches = 0;
         splits = 0;
-        this.canEndsSafepoint = true;
-        this.canEndsGuestSafepoint = true;
+        loopEndsSafepointState = SafepointState.ENABLED;
+        loopExitsSafepointState = SafepointState.ENABLED;
+        guestLoopEndsSafepointState = SafepointState.ENABLED;
         loopType = LoopType.SIMPLE_LOOP;
         unrollFactor = 1;
+    }
+
+    @SuppressWarnings("deprecation")
+    @Override
+    protected void afterClone(Node other) {
+        super.afterClone(other);
+        assert other instanceof LoopBeginNode : Assertions.errorMessage("Must be cloned from a previous loop begin", this, other);
+        // ideally we would want to verify that cloneFrom==-1 but when we copy a node manually with
+        // (addDuplicates) and call afterClone on it we have to override this value
+
+        final int otherNodeId = other.getId();
+        this.cloneFromNodeId = other.graph() != null ? ((long) other.graph().getCompressions() << 32L | otherNodeId) : otherNodeId;
+    }
+
+    public long getClonedFromNodeId() {
+        return cloneFromNodeId;
     }
 
     public void checkDisableCountedBySpeculation(int bci, StructuredGraph graph) {
@@ -183,11 +247,19 @@ public final class LoopBeginNode extends AbstractMergeNode implements IterableNo
     }
 
     public boolean canEndsSafepoint() {
-        return canEndsSafepoint;
+        return loopEndsSafepointState.canSafepoint();
+    }
+
+    public SafepointState getLoopEndsSafepointState() {
+        return loopEndsSafepointState;
     }
 
     public boolean canEndsGuestSafepoint() {
-        return canEndsGuestSafepoint;
+        return guestLoopEndsSafepointState.canSafepoint();
+    }
+
+    public boolean canExitsSafepoint() {
+        return loopExitsSafepointState.canSafepoint();
     }
 
     public void setStripMinedInner(boolean stripMinedInner) {
@@ -271,18 +343,26 @@ public final class LoopBeginNode extends AbstractMergeNode implements IterableNo
     }
 
     /** Disables safepoint for the whole loop, i.e., for all {@link LoopEndNode loop ends}. */
-    public void disableSafepoint() {
+    public void disableSafepoint(SafepointState newState) {
+        GraalError.guarantee(!newState.canSafepoint(), "New state must not safepoint %s", newState);
         /* Store flag locally in case new loop ends are created later on. */
-        this.canEndsSafepoint = false;
+        this.loopEndsSafepointState = newState;
         /* Propagate flag to all existing loop ends. */
         for (LoopEndNode loopEnd : loopEnds()) {
             loopEnd.disableSafepoint();
         }
     }
 
-    public void disableGuestSafepoint() {
+    /** Disables safepoint for the whole loop, i.e., for all {@link LoopEndNode loop ends}. */
+    public void disableLoopExitSafepoint(SafepointState newState) {
+        GraalError.guarantee(!newState.canSafepoint(), "New state must not safepoint %s", newState);
+        this.loopExitsSafepointState = newState;
+    }
+
+    public void disableGuestSafepoint(SafepointState newState) {
+        GraalError.guarantee(!newState.canSafepoint(), "New state must not safepoint %s", newState);
         /* Store flag locally in case new loop ends are created later on. */
-        this.canEndsGuestSafepoint = false;
+        this.guestLoopEndsSafepointState = newState;
         /* Propagate flag to all existing loop ends. */
         for (LoopEndNode loopEnd : loopEnds()) {
             loopEnd.disableGuestSafepoint();
@@ -311,6 +391,10 @@ public final class LoopBeginNode extends AbstractMergeNode implements IterableNo
 
     public NodeIterable<LoopExitNode> loopExits() {
         return usages().filter(LoopExitNode.class);
+    }
+
+    public NodeIterable<SafepointNode> loopSafepoints() {
+        return usages().filter(SafepointNode.class);
     }
 
     @Override
@@ -419,9 +503,9 @@ public final class LoopBeginNode extends AbstractMergeNode implements IterableNo
     }
 
     @Override
-    public boolean verify() {
+    public boolean verifyNode() {
         assertTrue(loopEnds().isNotEmpty(), "missing loopEnd");
-        return super.verify();
+        return super.verifyNode();
     }
 
     int nextEndIndex() {
@@ -595,6 +679,22 @@ public final class LoopBeginNode extends AbstractMergeNode implements IterableNo
              */
             checkDisableCountedBySpeculation(x.bci, graph());
         }
+    }
+
+    public void removeSafepoints() {
+        this.graph().getDebug().dump(DebugContext.VERY_DETAILED_LEVEL, this.graph(), "Before removing safepoints at %s", this);
+        for (SafepointNode loopSafepoint : loopSafepoints().snapshot()) {
+            if (loopSafepoint.isAlive()) {
+                if (loopSafepoint.predecessor() != null && loopSafepoint.next() != null) {
+                    this.graph().removeFixed(loopSafepoint);
+                } else {
+                    loopSafepoint.replaceAtPredecessor(null);
+                    loopSafepoint.safeDelete();
+                }
+            }
+        }
+
+        this.graph().getDebug().dump(DebugContext.VERY_DETAILED_LEVEL, this.graph(), "After removing safepoints at %s", this);
     }
 
 }

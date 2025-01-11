@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2020, 2024, Oracle and/or its affiliates. All rights reserved.
  * Copyright (c) 2020, 2020, Red Hat Inc. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
@@ -31,11 +31,11 @@ import java.util.List;
 import java.util.function.Consumer;
 import java.util.stream.Stream;
 
+import jdk.graal.compiler.debug.DebugContext;
 import jdk.vm.ci.meta.JavaConstant;
 import jdk.vm.ci.meta.JavaKind;
 import jdk.vm.ci.meta.ResolvedJavaMethod;
 import jdk.vm.ci.meta.ResolvedJavaType;
-import jdk.graal.compiler.debug.DebugContext;
 
 /**
  * Interfaces used to allow a native image to communicate details of types, code and data to the
@@ -47,17 +47,17 @@ public interface DebugInfoProvider {
     /**
      * Number of bits oops are left shifted by when using compressed oops.
      */
-    int oopCompressShift();
+    int compressionShift();
 
     /**
      * Mask selecting low order bits used for tagging oops.
      */
-    int oopTagsMask();
+    int reservedBitsMask();
 
     /**
      * Number of bytes used to store an oop reference.
      */
-    int oopReferenceSize();
+    int referenceSize();
 
     /**
      * Number of bytes used to store a raw pointer.
@@ -67,7 +67,7 @@ public interface DebugInfoProvider {
     /**
      * Alignment of object memory area (and, therefore, of any oop) in bytes.
      */
-    int oopAlignment();
+    int objectAlignment();
 
     int compiledCodeMax();
 
@@ -128,6 +128,11 @@ public interface DebugInfoProvider {
          * @return the fully qualified name of the debug type.
          */
         String typeName();
+
+        /**
+         * @return a 64bit type signature to uniquely identify the type
+         */
+        long typeSignature(String prefix);
 
         DebugTypeKind typeKind();
 
@@ -355,8 +360,6 @@ public interface DebugInfoProvider {
         String getPartition();
 
         long getOffset();
-
-        long getAddress();
 
         long getSize();
     }

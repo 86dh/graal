@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2020, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -48,6 +48,7 @@ import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 import static org.junit.Assume.assumeTrue;
 
+import java.lang.invoke.MethodHandles;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
@@ -85,9 +86,13 @@ public class DynamicObjectLibraryTest extends AbstractParametrizedLibraryTest {
         Supplier<? extends DynamicObject> minimalSupplier = () -> new TestDynamicObjectMinimal(shapeMin);
         addParams(params, minimalSupplier);
 
-        Shape shapeDef = Shape.newBuilder().layout(TestDynamicObjectDefault.class).build();
+        Shape shapeDef = Shape.newBuilder().layout(TestDynamicObjectDefault.class, MethodHandles.lookup()).build();
         Supplier<? extends DynamicObject> defaultSupplier = () -> new TestDynamicObjectDefault(shapeDef);
         addParams(params, defaultSupplier);
+
+        Shape shapeDefLegacy = Shape.newBuilder().layout(TestDynamicObjectDefault.class).build();
+        Supplier<? extends DynamicObject> defaultSupplierLegacy = () -> new TestDynamicObjectDefault(shapeDefLegacy);
+        addParams(params, defaultSupplierLegacy);
 
         return params;
     }
@@ -797,7 +802,8 @@ public class DynamicObjectLibraryTest extends AbstractParametrizedLibraryTest {
     }
 
     private static Object newObjectType() {
-        return new com.oracle.truffle.api.object.ObjectType();
+        return new Object() {
+        };
     }
 
     private List<Object> getKeyList(DynamicObject obj) {

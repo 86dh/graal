@@ -29,7 +29,6 @@ import static jdk.graal.compiler.nodes.extended.BranchProbabilityNode.FAST_PATH_
 import static jdk.graal.compiler.nodes.extended.BranchProbabilityNode.FREQUENT_PROBABILITY;
 import static jdk.graal.compiler.nodes.extended.BranchProbabilityNode.NOT_FREQUENT_PROBABILITY;
 import static jdk.graal.compiler.nodes.extended.BranchProbabilityNode.probability;
-import static jdk.vm.ci.services.Services.IS_BUILDING_NATIVE_IMAGE;
 
 import java.util.EnumMap;
 import java.util.function.Supplier;
@@ -357,9 +356,7 @@ public abstract class ArrayCopySnippets implements Snippets {
     protected abstract void doGenericArraycopySnippet(Object src, int srcPos, Object dest, int destPos, int length, JavaKind elementKind, LocationIdentity arrayLocation, Counters counters);
 
     private static void incrementLengthCounter(int length, Counters counters) {
-        if (!IS_BUILDING_NATIVE_IMAGE) {
-            counters.lengthHistogram.inc(length);
-        }
+        counters.lengthHistogram.inc(length);
     }
 
     private static final int SRC_IDX = 0;
@@ -664,22 +661,22 @@ public abstract class ArrayCopySnippets implements Snippets {
             args.add("length", arraycopy.getLength());
             if (snippetInfo != arraycopyNativeExceptionSnippet) {
                 assert arrayTypeCheck != ArrayCopyTypeCheck.UNDEFINED_ARRAY_TYPE_CHECK : "Must not be arrayTypeCheck " + Assertions.errorMessageContext("arrayCopy", arraycopy);
-                args.addConst("arrayTypeCheck", arrayTypeCheck);
+                args.add("arrayTypeCheck", arrayTypeCheck);
             }
             Object locationIdentity = arraycopy.killsAnyLocation() ? LocationIdentity.any() : NamedLocationIdentity.getArrayLocation(elementKind);
             if (snippetInfo == arraycopyExactStubCallSnippet || snippetInfo == delayedExactArraycopyWithExpandedLoopSnippet) {
                 assert elementKind != null;
-                args.addConst("elementKind", elementKind);
-                args.addConst("locationIdentity", locationIdentity);
-                args.addConst("elementKindCounter", counters.arraycopyCallCounters.get(elementKind));
-                args.addConst("elementKindCopiedCounter", counters.arraycopyCallCopiedCounters.get(elementKind));
+                args.add("elementKind", elementKind);
+                args.add("locationIdentity", locationIdentity);
+                args.add("elementKindCounter", counters.arraycopyCallCounters.get(elementKind));
+                args.add("elementKindCopiedCounter", counters.arraycopyCallCopiedCounters.get(elementKind));
             }
-            args.addConst("counters", counters);
+            args.add("counters", counters);
             if (snippetInfo == delayedCheckcastArraycopySnippet) {
-                args.addConst("elementKind", JavaKind.Illegal);
+                args.add("elementKind", JavaKind.Illegal);
             }
             if (snippetInfo == delayedGenericArraycopySnippet) {
-                args.addConst("elementKind", JavaKind.Illegal);
+                args.add("elementKind", JavaKind.Illegal);
             }
 
             instantiate(tool, args, arraycopy);
@@ -698,11 +695,11 @@ public abstract class ArrayCopySnippets implements Snippets {
             args.add("length", arraycopy.getLength());
 
             JavaKind elementKind = arraycopy.getElementKind();
-            args.addConst("elementKind", (elementKind == null) ? JavaKind.Illegal : elementKind);
+            args.add("elementKind", (elementKind == null) ? JavaKind.Illegal : elementKind);
 
             Object locationIdentity = (elementKind == null) ? LocationIdentity.any() : NamedLocationIdentity.getArrayLocation(arraycopy.getElementKind());
-            args.addConst("arrayLocation", locationIdentity);
-            args.addConst("counters", counters);
+            args.add("arrayLocation", locationIdentity);
+            args.add("counters", counters);
             instantiate(tool, args, arraycopy);
         }
 

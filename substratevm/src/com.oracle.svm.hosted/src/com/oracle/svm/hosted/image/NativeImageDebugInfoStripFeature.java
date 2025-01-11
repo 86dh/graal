@@ -25,13 +25,10 @@
 package com.oracle.svm.hosted.image;
 
 import java.io.IOException;
-import java.nio.file.Files;
 import java.nio.file.Path;
 
-import jdk.graal.compiler.debug.DebugContext;
-import jdk.graal.compiler.debug.DebugContext.Builder;
-import jdk.graal.compiler.debug.Indent;
-import jdk.graal.compiler.printer.GraalDebugHandlersFactory;
+import org.graalvm.nativeimage.Platform;
+import org.graalvm.nativeimage.impl.InternalPlatform;
 
 import com.oracle.graal.pointsto.util.GraalAccess;
 import com.oracle.objectfile.ObjectFile;
@@ -47,12 +44,18 @@ import com.oracle.svm.hosted.FeatureImpl.AfterImageWriteAccessImpl;
 import com.oracle.svm.hosted.c.util.FileUtils;
 import com.oracle.svm.util.LogUtils;
 
+import jdk.graal.compiler.core.common.SuppressFBWarnings;
+import jdk.graal.compiler.debug.DebugContext;
+import jdk.graal.compiler.debug.DebugContext.Builder;
+import jdk.graal.compiler.debug.Indent;
+import jdk.graal.compiler.printer.GraalDebugHandlersFactory;
+
 @AutomaticallyRegisteredFeature
 public class NativeImageDebugInfoStripFeature implements InternalFeature {
 
     @Override
     public boolean isInConfiguration(IsInConfigurationAccess access) {
-        return SubstrateOptions.useDebugInfoGeneration() && SubstrateOptions.StripDebugInfo.getValue();
+        return SubstrateOptions.StripDebugInfo.getValue();
     }
 
     @SuppressWarnings("try")
@@ -77,13 +80,17 @@ public class NativeImageDebugInfoStripFeature implements InternalFeature {
         }
     }
 
+    @SuppressFBWarnings(value = "", justification = "FB reports null pointer dereferencing although it is not possible in this case.")
     private static void stripLinux(AfterImageWriteAccessImpl accessImpl) {
         String objcopyExe = "objcopy";
         String debugExtension = ".debug";
         Path imagePath = accessImpl.getImagePath();
+        if (imagePath == null) {
+            assert !Platform.includedIn(InternalPlatform.NATIVE_ONLY.class);
+            return;
+        }
+
         Path imageName = imagePath.getFileName();
-        Path outputDirectory = imagePath.getParent();
-        String debugInfoName = imageName + debugExtension;
         boolean objcopyAvailable = false;
         try {
             objcopyAvailable = FileUtils.executeCommand(objcopyExe, "--version") == 0;
@@ -94,27 +101,31 @@ public class NativeImageDebugInfoStripFeature implements InternalFeature {
         }
 
         if (!objcopyAvailable) {
-            LogUtils.warning("%s not available. Skipping generation of separate debuginfo file %s, debuginfo will remain embedded in the executable.", objcopyExe, debugInfoName);
+            LogUtils.warning("%s not available. The debuginfo will remain embedded in the executable.", objcopyExe);
         } else {
             try {
+                Path outputDirectory = imagePath.getParent();
                 String imageFilePath = outputDirectory.resolve(imageName).toString();
-                Path debugInfoFilePath = outputDirectory.resolve(debugInfoName);
-                FileUtils.executeCommand(objcopyExe, "--only-keep-debug", imageFilePath, debugInfoFilePath.toString());
-                BuildArtifacts.singleton().add(ArtifactType.DEBUG_INFO, debugInfoFilePath);
-                Path exportedSymbolsPath = createKeepSymbolsListFile(accessImpl);
-                FileUtils.executeCommand(objcopyExe, "--strip-all", "--keep-symbols=" + exportedSymbolsPath, imageFilePath);
-                FileUtils.executeCommand(objcopyExe, "--add-gnu-debuglink=" + debugInfoFilePath, imageFilePath);
+                if (SubstrateOptions.useDebugInfoGeneration()) {
+                    /* Generate a separate debug file before stripping the executable. */
+                    String debugInfoName = imageName + debugExtension;
+                    Path debugInfoFilePath = outputDirectory.resolve(debugInfoName);
+                    FileUtils.executeCommand(objcopyExe, "--only-keep-debug", imageFilePath, debugInfoFilePath.toString());
+                    BuildArtifacts.singleton().add(ArtifactType.DEBUG_INFO, debugInfoFilePath);
+                    FileUtils.executeCommand(objcopyExe, "--add-gnu-debuglink=" + debugInfoFilePath, imageFilePath);
+                }
+                if (SubstrateOptions.DeleteLocalSymbols.getValue()) {
+                    /* Strip debug info and local symbols. */
+                    FileUtils.executeCommand(objcopyExe, "--strip-all", imageFilePath);
+                } else {
+                    /* Strip debug info only. */
+                    FileUtils.executeCommand(objcopyExe, "--strip-debug", imageFilePath);
+                }
             } catch (IOException e) {
                 throw UserError.abort("Generation of separate debuginfo file failed", e);
             } catch (InterruptedException e) {
                 throw new InterruptImageBuilding("Interrupted during debuginfo file splitting of image " + imageName);
             }
         }
-    }
-
-    private static Path createKeepSymbolsListFile(AfterImageWriteAccessImpl accessImpl) throws IOException {
-        Path exportedSymbolsPath = accessImpl.getTempDirectory().resolve("keep-symbols.list").toAbsolutePath();
-        Files.write(exportedSymbolsPath, accessImpl.getImageSymbols(false));
-        return exportedSymbolsPath;
     }
 }

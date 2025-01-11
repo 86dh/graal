@@ -29,8 +29,6 @@ import static jdk.graal.compiler.hotspot.meta.HotSpotForeignCallDescriptor.Trans
 import static jdk.vm.ci.hotspot.HotSpotCallingConventionType.NativeCall;
 import static org.graalvm.word.LocationIdentity.any;
 
-import org.graalvm.word.WordFactory;
-
 import jdk.graal.compiler.api.replacements.Fold;
 import jdk.graal.compiler.core.common.spi.ForeignCallDescriptor;
 import jdk.graal.compiler.graph.Node.ConstantNodeParameter;
@@ -58,7 +56,7 @@ import jdk.vm.ci.code.Register;
 public class CreateExceptionStub extends SnippetStub {
 
     public static class Options {
-        @Option(help = "Testing only option that forces deopts for exception throws", type = OptionType.Expert)//
+        @Option(help = "Testing only option that forces deopts for exception throws", type = OptionType.Debug)//
         public static final OptionKey<Boolean> HotSpotDeoptExplicitExceptions = new OptionKey<>(false);
     }
 
@@ -86,7 +84,7 @@ public class CreateExceptionStub extends SnippetStub {
     }
 
     protected static Object createException(Register threadRegister, Class<? extends Throwable> exception) {
-        Word message = WordFactory.zero();
+        Word message = Word.zero();
         return createException(threadRegister, exception, message);
     }
 

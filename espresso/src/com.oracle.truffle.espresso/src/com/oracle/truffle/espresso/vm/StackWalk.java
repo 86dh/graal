@@ -30,9 +30,9 @@ import java.util.concurrent.atomic.AtomicLong;
 import com.oracle.truffle.api.Truffle;
 import com.oracle.truffle.api.frame.FrameInstance;
 import com.oracle.truffle.api.frame.FrameInstanceVisitor;
-import com.oracle.truffle.espresso.descriptors.Symbol;
-import com.oracle.truffle.espresso.descriptors.Symbol.Name;
-import com.oracle.truffle.espresso.descriptors.Symbol.Signature;
+import com.oracle.truffle.espresso.classfile.descriptors.Symbol;
+import com.oracle.truffle.espresso.classfile.descriptors.Symbol.Name;
+import com.oracle.truffle.espresso.classfile.descriptors.Symbol.Signature;
 import com.oracle.truffle.espresso.impl.Klass;
 import com.oracle.truffle.espresso.impl.Method;
 import com.oracle.truffle.espresso.meta.EspressoError;
@@ -116,7 +116,7 @@ public final class StackWalk {
             throw meta.throwException(meta.java_lang_InternalError);
         }
         register(fw);
-        Object result = meta.java_lang_StackStreamFactory_AbstractStackWalker_doStackWalk.invokeDirect(stackStream, fw.anchor, skipframes, batchSize, startIndex, startIndex + decoded);
+        Object result = meta.java_lang_StackStreamFactory_AbstractStackWalker_doStackWalk.invokeDirectSpecial(stackStream, fw.anchor, skipframes, batchSize, startIndex, startIndex + decoded);
         unAnchor(fw);
         return (StaticObject) result;
     }

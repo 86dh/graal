@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2011, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -221,14 +221,14 @@ public class AMD64ControlFlow {
             } else {
                 AMD64AddressValue yAddress = (AMD64AddressValue) y;
                 if (crb.isSuccessorEdge(trueDestination)) {
-                    masm.testAndJcc(size, asRegister(x), yAddress.toAddress(), condition.negate(), falseDestination.label(), false, applyBeforeFusedPair);
+                    masm.testAndJcc(size, asRegister(x), yAddress.toAddress(masm), condition.negate(), falseDestination.label(), false, applyBeforeFusedPair);
                 } else if (crb.isSuccessorEdge(falseDestination)) {
-                    masm.testAndJcc(size, asRegister(x), yAddress.toAddress(), condition, trueDestination.label(), false, applyBeforeFusedPair);
+                    masm.testAndJcc(size, asRegister(x), yAddress.toAddress(masm), condition, trueDestination.label(), false, applyBeforeFusedPair);
                 } else if (trueDestinationProbability < 0.5) {
-                    masm.testAndJcc(size, asRegister(x), yAddress.toAddress(), condition.negate(), falseDestination.label(), false, applyBeforeFusedPair);
+                    masm.testAndJcc(size, asRegister(x), yAddress.toAddress(masm), condition.negate(), falseDestination.label(), false, applyBeforeFusedPair);
                     masm.jmp(trueDestination.label());
                 } else {
-                    masm.testAndJcc(size, asRegister(x), yAddress.toAddress(), condition, trueDestination.label(), false, applyBeforeFusedPair);
+                    masm.testAndJcc(size, asRegister(x), yAddress.toAddress(masm), condition, trueDestination.label(), false, applyBeforeFusedPair);
                     masm.jmp(falseDestination.label());
                 }
             }
@@ -301,14 +301,14 @@ public class AMD64ControlFlow {
             } else {
                 AMD64AddressValue xAddress = (AMD64AddressValue) x;
                 if (crb.isSuccessorEdge(trueDestination)) {
-                    masm.testAndJcc(size, xAddress.toAddress(), y, condition.negate(), falseDestination.label(), false, applyBeforeFusedPair);
+                    masm.testAndJcc(size, xAddress.toAddress(masm), y, condition.negate(), falseDestination.label(), false, applyBeforeFusedPair);
                 } else if (crb.isSuccessorEdge(falseDestination)) {
-                    masm.testAndJcc(size, xAddress.toAddress(), y, condition, trueDestination.label(), false, applyBeforeFusedPair);
+                    masm.testAndJcc(size, xAddress.toAddress(masm), y, condition, trueDestination.label(), false, applyBeforeFusedPair);
                 } else if (trueDestinationProbability < 0.5) {
-                    masm.testAndJcc(size, xAddress.toAddress(), y, condition.negate(), falseDestination.label(), false, applyBeforeFusedPair);
+                    masm.testAndJcc(size, xAddress.toAddress(masm), y, condition.negate(), falseDestination.label(), false, applyBeforeFusedPair);
                     masm.jmp(trueDestination.label());
                 } else {
-                    masm.testAndJcc(size, xAddress.toAddress(), y, condition, trueDestination.label(), false, applyBeforeFusedPair);
+                    masm.testAndJcc(size, xAddress.toAddress(masm), y, condition, trueDestination.label(), false, applyBeforeFusedPair);
                     masm.jmp(falseDestination.label());
                 }
             }
@@ -321,6 +321,25 @@ public class AMD64ControlFlow {
                 return true;
             }
             return false;
+        }
+    }
+
+    public static class BitTestAndBranchOp extends BranchOp {
+        public static final LIRInstructionClass<BitTestAndBranchOp> TYPE = LIRInstructionClass.create(BitTestAndBranchOp.class);
+
+        @Use protected AllocatableValue value;
+        private final int index;
+
+        public BitTestAndBranchOp(LabelRef trueDestination, LabelRef falseDestination, AllocatableValue value, double trueDestinationProbability, int index) {
+            super(TYPE, ConditionFlag.CarryClear, trueDestination, falseDestination, trueDestinationProbability);
+            this.value = value;
+            this.index = index;
+        }
+
+        @Override
+        public void emitCode(CompilationResultBuilder crb, AMD64MacroAssembler masm) {
+            masm.btq(asRegister(value), index);
+            super.emitCode(crb, masm);
         }
     }
 
@@ -378,14 +397,14 @@ public class AMD64ControlFlow {
             } else {
                 AMD64AddressValue yAddress = (AMD64AddressValue) y;
                 if (crb.isSuccessorEdge(trueDestination)) {
-                    masm.cmpAndJcc(size, asRegister(x), yAddress.toAddress(), condition.negate(), falseDestination.label(), false, applyBeforeFusedPair);
+                    masm.cmpAndJcc(size, asRegister(x), yAddress.toAddress(masm), condition.negate(), falseDestination.label(), false, applyBeforeFusedPair);
                 } else if (crb.isSuccessorEdge(falseDestination)) {
-                    masm.cmpAndJcc(size, asRegister(x), yAddress.toAddress(), condition, trueDestination.label(), false, applyBeforeFusedPair);
+                    masm.cmpAndJcc(size, asRegister(x), yAddress.toAddress(masm), condition, trueDestination.label(), false, applyBeforeFusedPair);
                 } else if (trueDestinationProbability < 0.5) {
-                    masm.cmpAndJcc(size, asRegister(x), yAddress.toAddress(), condition.negate(), falseDestination.label(), false, applyBeforeFusedPair);
+                    masm.cmpAndJcc(size, asRegister(x), yAddress.toAddress(masm), condition.negate(), falseDestination.label(), false, applyBeforeFusedPair);
                     masm.jmp(trueDestination.label());
                 } else {
-                    masm.cmpAndJcc(size, asRegister(x), yAddress.toAddress(), condition, trueDestination.label(), false, applyBeforeFusedPair);
+                    masm.cmpAndJcc(size, asRegister(x), yAddress.toAddress(masm), condition, trueDestination.label(), false, applyBeforeFusedPair);
                     masm.jmp(falseDestination.label());
                 }
             }
@@ -476,14 +495,14 @@ public class AMD64ControlFlow {
             } else {
                 AMD64AddressValue xAddress = (AMD64AddressValue) x;
                 if (crb.isSuccessorEdge(trueDestination)) {
-                    masm.cmpAndJcc(size, xAddress.toAddress(), y, condition.negate(), falseDestination.label(), false, inlineDataInCode, applyBeforeFusedPair);
+                    masm.cmpAndJcc(size, xAddress.toAddress(masm), y, condition.negate(), falseDestination.label(), false, inlineDataInCode, applyBeforeFusedPair);
                 } else if (crb.isSuccessorEdge(falseDestination)) {
-                    masm.cmpAndJcc(size, xAddress.toAddress(), y, condition, trueDestination.label(), false, inlineDataInCode, applyBeforeFusedPair);
+                    masm.cmpAndJcc(size, xAddress.toAddress(masm), y, condition, trueDestination.label(), false, inlineDataInCode, applyBeforeFusedPair);
                 } else if (trueDestinationProbability < 0.5) {
-                    masm.cmpAndJcc(size, xAddress.toAddress(), y, condition.negate(), falseDestination.label(), false, inlineDataInCode, applyBeforeFusedPair);
+                    masm.cmpAndJcc(size, xAddress.toAddress(masm), y, condition.negate(), falseDestination.label(), false, inlineDataInCode, applyBeforeFusedPair);
                     masm.jmp(trueDestination.label());
                 } else {
-                    masm.cmpAndJcc(size, xAddress.toAddress(), y, condition, trueDestination.label(), false, inlineDataInCode, applyBeforeFusedPair);
+                    masm.cmpAndJcc(size, xAddress.toAddress(masm), y, condition, trueDestination.label(), false, inlineDataInCode, applyBeforeFusedPair);
                     masm.jmp(falseDestination.label());
                 }
             }
@@ -535,6 +554,7 @@ public class AMD64ControlFlow {
 
         public FloatBranchOp(Condition condition, boolean unorderedIsTrue, LabelRef trueDestination, LabelRef falseDestination, double trueDestinationProbability, boolean isSelfEqualsCheck) {
             super(TYPE, floatCond(condition), trueDestination, falseDestination, trueDestinationProbability);
+            GraalError.guarantee(unorderedIsTrue == AMD64ControlFlow.trueOnUnordered(condition) || condition == Condition.EQ || condition == Condition.NE, "Should only query parity flag on eq/ne");
             this.unorderedIsTrue = unorderedIsTrue;
             this.isSelfEqualsCheck = isSelfEqualsCheck;
         }
@@ -691,32 +711,37 @@ public class AMD64ControlFlow {
             masm.addq(scratchReg, idxScratchReg);
             masm.jmp(scratchReg);
 
-            // Inserting padding so that jump table address is 4-byte aligned
-            masm.align(4);
+            crb.getLIR().addSlowPath(null, () -> {
+                // Insert halt so that static analyzers do not continue decoding past this point
+                masm.hlt();
+                // Insert ud2 so the CPU does not continue decoding past this point
+                masm.ud2();
+                // Inserting padding so that jump table address is 4-byte aligned
+                masm.align(4);
+                // Patch LEA instruction above now that we know the position of the jump table
+                // this is ugly but there is no better way to do this given the assembler API
+                int jumpTablePos = masm.position();
+                int leaDisplacementPosition = afterLea - 4;
+                masm.emitInt(jumpTablePos - afterLea, leaDisplacementPosition);
 
-            // Patch LEA instruction above now that we know the position of the jump table
-            // this is ugly but there is no better way to do this given the assembler API
-            final int jumpTablePos = masm.position();
-            final int leaDisplacementPosition = afterLea - 4;
-            masm.emitInt(jumpTablePos - afterLea, leaDisplacementPosition);
+                // Emit jump table entries
+                targets.forEach(label -> {
+                    int offsetToJumpTableBase = masm.position() - jumpTablePos;
+                    if (label.isBound()) {
+                        int imm32 = label.position() - jumpTablePos;
+                        masm.emitInt(imm32);
+                    } else {
+                        label.addPatchAt(masm.position(), masm);
 
-            // Emit jump table entries
-            targets.forEach(label -> {
-                int offsetToJumpTableBase = masm.position() - jumpTablePos;
-                if (label.isBound()) {
-                    int imm32 = label.position() - jumpTablePos;
-                    masm.emitInt(imm32);
-                } else {
-                    label.addPatchAt(masm.position(), masm);
+                        masm.emitByte(0); // pseudo-opcode for jump table entry
+                        masm.emitShort(offsetToJumpTableBase);
+                        masm.emitByte(0); // padding to make jump table entry 4 bytes wide
+                    }
+                });
 
-                    masm.emitByte(0); // pseudo-opcode for jump table entry
-                    masm.emitShort(offsetToJumpTableBase);
-                    masm.emitByte(0); // padding to make jump table entry 4 bytes wide
-                }
+                JumpTable jt = new JumpTable(jumpTablePos, lowKey, highKey, EntryFormat.OFFSET_ONLY);
+                crb.compilationResult.addAnnotation(jt);
             });
-
-            JumpTable jt = new JumpTable(jumpTablePos, lowKey, highKey, EntryFormat.OFFSET_ONLY);
-            crb.compilationResult.addAnnotation(jt);
         }
     }
 
@@ -774,38 +799,43 @@ public class AMD64ControlFlow {
             masm.addq(scratchReg, entryScratchReg);
             masm.jmp(scratchReg);
 
-            // Inserting padding so that jump the table address is aligned
-            EntryFormat entryFormat = defaultTarget == null ? EntryFormat.OFFSET_ONLY : EntryFormat.VALUE_AND_OFFSET;
-            masm.align(entryFormat.size);
+            crb.getLIR().addSlowPath(this, () -> {
+                // Insert halt so that static analyzers do not continue decoding past this point
+                masm.hlt();
+                // Insert ud2 so the CPU does not continue decoding past this point
+                masm.ud2();
+                // Inserting padding so that jump the table address is aligned
+                EntryFormat entryFormat = defaultTarget == null ? EntryFormat.OFFSET_ONLY : EntryFormat.VALUE_AND_OFFSET;
+                masm.align(entryFormat.size);
 
-            // Patch LEA instruction above now that we know the position of the jump table
-            // this is ugly but there is no better way to do this given the assembler API
-            final int jumpTablePos = masm.position();
-            final int leaDisplacementPosition = afterLea - 4;
-            masm.emitInt(jumpTablePos - afterLea, leaDisplacementPosition);
+                // Patch LEA instruction above now that we know the position of the jump table
+                // this is ugly but there is no better way to do this given the assembler API
+                final int jumpTablePos = masm.position();
+                final int leaDisplacementPosition = afterLea - 4;
+                masm.emitInt(jumpTablePos - afterLea, leaDisplacementPosition);
 
-            // Emit jump table entries
-            for (int i = 0; i < targets.length; i++) {
+                // Emit jump table entries
+                for (int i = 0; i < targets.length; i++) {
+                    Label label = targets[i].label();
 
-                Label label = targets[i].label();
-
-                if (defaultTarget != null) {
-                    masm.emitInt(keys[i].asInt());
+                    if (defaultTarget != null) {
+                        masm.emitInt(keys[i].asInt());
+                    }
+                    if (label.isBound()) {
+                        int imm32 = label.position() - jumpTablePos;
+                        masm.emitInt(imm32);
+                    } else {
+                        int offsetToJumpTableBase = masm.position() - jumpTablePos;
+                        label.addPatchAt(masm.position(), masm);
+                        masm.emitByte(0); // pseudo-opcode for jump table entry
+                        masm.emitShort(offsetToJumpTableBase);
+                        masm.emitByte(0); // padding to make jump table entry 4 bytes wide
+                    }
                 }
-                if (label.isBound()) {
-                    int imm32 = label.position() - jumpTablePos;
-                    masm.emitInt(imm32);
-                } else {
-                    int offsetToJumpTableBase = masm.position() - jumpTablePos;
-                    label.addPatchAt(masm.position(), masm);
-                    masm.emitByte(0); // pseudo-opcode for jump table entry
-                    masm.emitShort(offsetToJumpTableBase);
-                    masm.emitByte(0); // padding to make jump table entry 4 bytes wide
-                }
-            }
 
-            JumpTable jt = new JumpTable(jumpTablePos, 0, keys.length - 1, entryFormat);
-            crb.compilationResult.addAnnotation(jt);
+                JumpTable jt = new JumpTable(jumpTablePos, 0, keys.length - 1, entryFormat);
+                crb.compilationResult.addAnnotation(jt);
+            });
         }
     }
 
@@ -872,13 +902,15 @@ public class AMD64ControlFlow {
         public static final LIRInstructionClass<FloatCondMoveOp> TYPE = LIRInstructionClass.create(FloatCondMoveOp.class);
         @LIRInstruction.Def({LIRInstruction.OperandFlag.REG}) protected Value result;
         @LIRInstruction.Alive({LIRInstruction.OperandFlag.REG}) protected Value trueValue;
-        @LIRInstruction.Alive({LIRInstruction.OperandFlag.REG}) protected Value falseValue;
+        @LIRInstruction.Use({LIRInstruction.OperandFlag.REG}) protected Value falseValue;
         private final ConditionFlag condition;
         private final boolean unorderedIsTrue;
         private final boolean isSelfEqualsCheck;
 
         public FloatCondMoveOp(Variable result, Condition condition, boolean unorderedIsTrue, AllocatableValue trueValue, AllocatableValue falseValue, boolean isSelfEqualsCheck) {
             super(TYPE);
+            // EQ_O would kill falseValue, don't do it here
+            GraalError.guarantee(isSelfEqualsCheck || condition == Condition.NE || unorderedIsTrue == AMD64ControlFlow.trueOnUnordered(condition), "Should only query parity flag on ne");
             this.result = result;
             this.condition = floatCond(condition);
             this.unorderedIsTrue = unorderedIsTrue;
@@ -899,16 +931,13 @@ public class AMD64ControlFlow {
         assert !result.equals(trueValue);
 
         // The isSelfEqualsCheck condition is x == x, i.e., !isNaN(x).
-        ConditionFlag moveCondition = (isSelfEqualsCheck ? ConditionFlag.NoParity : condition);
+        ConditionFlag selfEqualFlag = condition == ConditionFlag.Equal ? ConditionFlag.NoParity : ConditionFlag.Parity;
+        ConditionFlag moveCondition = (isSelfEqualsCheck ? selfEqualFlag : condition);
         AMD64Move.move(crb, masm, result, falseValue);
         cmove(crb, masm, result, moveCondition, trueValue);
 
-        if (isFloat && !isSelfEqualsCheck) {
-            if (unorderedIsTrue && !trueOnUnordered(condition)) {
-                cmove(crb, masm, result, ConditionFlag.Parity, trueValue);
-            } else if (!unorderedIsTrue && trueOnUnordered(condition)) {
-                cmove(crb, masm, result, ConditionFlag.Parity, falseValue);
-            }
+        if (isFloat && !isSelfEqualsCheck && unorderedIsTrue && condition == ConditionFlag.NotEqual) {
+            cmove(crb, masm, result, ConditionFlag.Parity, trueValue);
         }
     }
 

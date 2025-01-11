@@ -56,21 +56,17 @@ jobs:
 
     runs-on: ubuntu-latest
 
+    if: github.repository == 'oracle/graal'
+
     steps:
-    - uses: browser-actions/setup-chrome@v1
-      with:
-        chrome-version: dev
-      id: setup-chrome
     - name: Checkout oracle/graal
       uses: actions/checkout@v4
       with:
-        fetch-depth: 1
         path: ${{ github.workspace }}/graal
     - name: Checkout oracle/graaljs
       uses: actions/checkout@v4
       with:
         repository: oracle/graaljs
-        fetch-depth: 1
         sparse-checkout: |
           graal-js
         path: ${{ github.workspace }}/js
@@ -78,11 +74,10 @@ jobs:
       uses: actions/checkout@v4
       with:
         repository: graalvm/mx.git
-        fetch-depth: 1
         ref: master
         path: ${{ env.MX_PATH }}
     - name: Set up Python
-      uses: actions/setup-python@v4
+      uses: actions/setup-python@v5
       with:
         python-version: '3.8'
     - name: Fetch LabsJDK
@@ -90,10 +85,8 @@ jobs:
         mkdir jdk-dl
         ${MX_PATH}/mx --java-home= fetch-jdk --jdk-id labsjdk-ce-${JDK_VERSION} --to jdk-dl --alias ${JAVA_HOME}
     - run: |
-        echo Installed chromium version: ${{ steps.setup-chrome.outputs.chrome-version }}
-        ${{ steps.setup-chrome.outputs.chrome-path }} --version
         cd ${{ github.workspace }}/graal/vm
         ${MX_PATH}/mx --dy /tools,graal-js build
         cd tests/gh_workflows/CDTInspectorTest
         mvn -q compile
-        mvn -q exec:exec -Dtestargs="${{ github.workspace }}/graal/sdk/latest_graalvm_home/bin/js scripts/StepTest.js ${{ steps.setup-chrome.outputs.chrome-path }} ${{ steps.setup-chrome.outputs.chrome-version }}"
+        mvn -q exec:exec -Dtestargs="${{ github.workspace }}/graal/sdk/latest_graalvm_home/bin/js scripts/StepTest.js"

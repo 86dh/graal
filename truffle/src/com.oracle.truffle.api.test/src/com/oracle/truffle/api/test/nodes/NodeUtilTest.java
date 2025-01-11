@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -86,7 +86,7 @@ public class NodeUtilTest {
         });
     }
 
-    private static class NotAdoptableNode extends Node {
+    private static final class NotAdoptableNode extends Node {
         @Override
         public boolean isAdoptable() {
             return false;

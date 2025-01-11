@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2007, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2007, 2024, Oracle and/or its affiliates. All rights reserved.
  * Copyright (c) 2020, 2020, Red Hat Inc. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
@@ -32,9 +32,8 @@ import java.io.File;
 import java.io.InputStream;
 import java.io.PrintStream;
 import java.net.URL;
-import java.util.Arrays;
+import java.security.Permission;
 import java.util.Enumeration;
-import java.util.List;
 import java.util.Map;
 import java.util.Properties;
 import java.util.concurrent.ConcurrentHashMap;
@@ -48,8 +47,10 @@ import org.graalvm.nativeimage.Platforms;
 import org.graalvm.nativeimage.hosted.FieldValueTransformer;
 import org.graalvm.nativeimage.impl.InternalPlatform;
 
+import com.oracle.svm.core.BuildPhaseProvider;
 import com.oracle.svm.core.NeverInline;
-import com.oracle.svm.core.Processor;
+import com.oracle.svm.core.NeverInlineTrivial;
+import com.oracle.svm.core.SubstrateOptions;
 import com.oracle.svm.core.SubstrateUtil;
 import com.oracle.svm.core.Uninterruptible;
 import com.oracle.svm.core.annotate.Alias;
@@ -61,9 +62,11 @@ import com.oracle.svm.core.annotate.RecomputeFieldValue.Kind;
 import com.oracle.svm.core.annotate.Substitute;
 import com.oracle.svm.core.annotate.TargetClass;
 import com.oracle.svm.core.annotate.TargetElement;
+import com.oracle.svm.core.container.Container;
+import com.oracle.svm.core.container.OperatingSystem;
+import com.oracle.svm.core.fieldvaluetransformer.FieldValueTransformerWithAvailability;
 import com.oracle.svm.core.hub.ClassForNameSupport;
 import com.oracle.svm.core.hub.DynamicHub;
-import com.oracle.svm.core.jdk.JavaLangSubstitutions.ClassValueSupport;
 import com.oracle.svm.core.monitor.MonitorSupport;
 import com.oracle.svm.core.snippets.SubstrateForeignCallTarget;
 import com.oracle.svm.core.thread.JavaThreads;
@@ -76,7 +79,6 @@ import jdk.graal.compiler.replacements.nodes.BinaryMathIntrinsicNode.BinaryOpera
 import jdk.graal.compiler.replacements.nodes.UnaryMathIntrinsicNode;
 import jdk.graal.compiler.replacements.nodes.UnaryMathIntrinsicNode.UnaryOperation;
 import jdk.internal.loader.ClassLoaderValue;
-import jdk.internal.module.ServicesCatalog;
 
 @TargetClass(java.lang.Object.class)
 @SuppressWarnings("static-method")
@@ -156,6 +158,16 @@ final class Target_java_lang_Enum {
 @TargetClass(java.lang.String.class)
 final class Target_java_lang_String {
 
+    // Checkstyle: stop
+    @Alias //
+    @RecomputeFieldValue(kind = RecomputeFieldValue.Kind.None, isFinal = true) //
+    public static boolean COMPACT_STRINGS;
+    // Checkstyle: resume
+
+    @Alias //
+    @RecomputeFieldValue(kind = RecomputeFieldValue.Kind.None, isFinal = true) //
+    public static byte LATIN1;
+
     @Substitute
     public String intern() {
         String thisStr = SubstrateUtil.cast(this, String.class);
@@ -179,7 +191,7 @@ final class Target_java_lang_String {
     native byte coder();
 
     @Alias @RecomputeFieldValue(kind = Kind.None, isFinal = true) //
-    byte[] value;
+    public byte[] value;
 
     @Alias //
     int hash;
@@ -208,12 +220,15 @@ final class Target_java_lang_StringUTF16 {
 final class Target_java_lang_Throwable {
 
     @Alias //
-    @TargetElement(onlyWith = JDK22OrLater.class) //
+    @TargetElement(onlyWith = JDKLatest.class) //
     @RecomputeFieldValue(kind = Kind.FromAlias, isFinal = true) //
     static boolean jfrTracing = false;
 
     @Alias @RecomputeFieldValue(kind = Reset)//
     Object backtrace;
+
+    @Alias//
+    Throwable cause;
 
     @Alias @RecomputeFieldValue(kind = Kind.Custom, declClass = ThrowableStackTraceFieldValueTransformer.class)//
     StackTraceElement[] stackTrace;
@@ -226,50 +241,14 @@ final class Target_java_lang_Throwable {
     // Checkstyle: resume
 
     /**
-     * Fills in the execution stack trace. {@link Throwable#fillInStackTrace()} cannot be
-     * {@code synchronized}, because it might be called in a {@link VMOperation} (via one of the
-     * {@link Throwable} constructors), where we are not allowed to block. To work around that, we
-     * do the following:
-     * <ul>
-     * <li>If we are not in a {@link VMOperation}, it executes {@link #fillInStackTrace(int)} in a
-     * block {@code synchronized} by the supplied {@link Throwable}. This is the default case.
-     * <li>If we are in a {@link VMOperation}, it checks if the {@link Throwable} is currently
-     * locked. If not, {@link #fillInStackTrace(int)} is called without synchronization, which is
-     * safe in a {@link VMOperation}. If it is locked, we do not do any filling (and thus do not
-     * collect the stack trace).
-     * </ul>
+     * Fills in the execution stack trace. Our {@link Throwable#fillInStackTrace()} cannot be
+     * declared {@code synchronized} because it might be called in a {@link VMOperation} (via one of
+     * the {@link Throwable} constructors), where we are not allowed to block. We work around that
+     * in {@link #fillInStackTrace(int)}.
      */
     @Substitute
-    @NeverInline("Starting a stack walk in the caller frame")
     public Target_java_lang_Throwable fillInStackTrace() {
-        if (VMOperation.isInProgress()) {
-            if (MonitorSupport.singleton().isLockedByAnyThread(this)) {
-                /*
-                 * The Throwable is locked. We cannot safely fill in the stack trace. Do nothing and
-                 * accept that we will not get a stack track.
-                 */
-            } else {
-                /*
-                 * The Throwable is not locked. We can safely fill the stack trace without
-                 * synchronization because we VMOperation is single threaded.
-                 */
-
-                /* Copy of `Throwable#fillInStackTrace()` */
-                if (stackTrace != null || backtrace != null) {
-                    fillInStackTrace(0);
-                    stackTrace = UNASSIGNED_STACK;
-                }
-            }
-        } else {
-            synchronized (this) {
-                /* Copy of `Throwable#fillInStackTrace()` */
-                if (stackTrace != null || backtrace != null) {
-                    fillInStackTrace(0);
-                    stackTrace = UNASSIGNED_STACK;
-                }
-            }
-        }
-        return this;
+        return fillInStackTrace(0);
     }
 
     /**
@@ -282,15 +261,42 @@ final class Target_java_lang_Throwable {
     @Substitute
     @NeverInline("Starting a stack walk in the caller frame")
     Target_java_lang_Throwable fillInStackTrace(int dummy) {
-        /*
-         * Start out by clearing the backtrace for this object, in case the VM runs out of memory
-         * while allocating the stack trace.
-         */
-        backtrace = null;
+        if (VMOperation.isInProgress()) {
+            if (MonitorSupport.singleton().isLockedByAnyThread(this)) {
+                /*
+                 * The Throwable is locked. We cannot safely fill in the stack trace. Do nothing and
+                 * accept that we will not get a stack trace.
+                 */
+            } else {
+                /*
+                 * The Throwable is not locked. We can safely fill the stack trace without
+                 * synchronization because we VMOperation is single threaded.
+                 */
 
-        BacktraceVisitor visitor = new BacktraceVisitor();
-        JavaThreads.visitCurrentStackFrames(visitor);
-        backtrace = visitor.getArray();
+                if (stackTrace != null || backtrace != null) {
+                    backtrace = null;
+
+                    BacktraceVisitor visitor = new BacktraceVisitor();
+                    JavaThreads.visitCurrentStackFrames(visitor);
+                    backtrace = visitor.getArray();
+
+                    stackTrace = UNASSIGNED_STACK;
+                }
+            }
+        } else {
+            /* Execute with synchronization. This is the default case. */
+            synchronized (this) {
+                if (stackTrace != null || backtrace != null) {
+                    backtrace = null;
+
+                    BacktraceVisitor visitor = new BacktraceVisitor();
+                    JavaThreads.visitCurrentStackFrames(visitor);
+                    backtrace = visitor.getArray();
+
+                    stackTrace = UNASSIGNED_STACK;
+                }
+            }
+        }
         return this;
     }
 }
@@ -334,7 +340,15 @@ final class Target_java_lang_Runtime {
     @Substitute
     @Platforms(InternalPlatform.PLATFORM_JNI.class)
     private int availableProcessors() {
-        return Processor.singleton().getActiveProcessorCount();
+        int optionValue = SubstrateOptions.ActiveProcessorCount.getValue();
+        if (optionValue > 0) {
+            return optionValue;
+        }
+
+        if (Container.singleton().isContainerized()) {
+            return Container.singleton().getActiveProcessorCount();
+        }
+        return OperatingSystem.singleton().getActiveProcessorCount();
     }
 }
 
@@ -387,6 +401,7 @@ final class Target_java_lang_System {
     }
 
     @Substitute
+    @NeverInlineTrivial("Used in 'java.home' access analysis: AnalyzeJavaHomeAccessPhase")
     private static String getProperty(String key) {
         checkKey(key);
         return SystemPropertiesSupport.singleton().getProperty(key);
@@ -399,6 +414,7 @@ final class Target_java_lang_System {
     }
 
     @Substitute
+    @NeverInlineTrivial("Used in 'java.home' access analysis: AnalyzeJavaHomeAccessPhase")
     private static String getProperty(String key, String def) {
         String result = getProperty(key);
         return result != null ? result : def;
@@ -407,29 +423,49 @@ final class Target_java_lang_System {
     @Alias
     private static native void checkKey(String key);
 
-    /*
-     * Note that there is no substitution for getSecurityManager, but instead getSecurityManager it
-     * is intrinsified in SubstrateGraphBuilderPlugins to always return null. This allows better
-     * constant folding of SecurityManager code already during static analysis.
+    /**
+     * Force System.Never in case it was set at build time via the `-Djava.security.manager=allow`
+     * passed to the image builder.
+     */
+    @Alias @RecomputeFieldValue(kind = Kind.FromAlias, isFinal = true) //
+    @TargetElement(onlyWith = JDK21OrEarlier.class) private static int allowSecurityManager = 1;
+
+    /**
+     * We do not support the {@link SecurityManager} so this method must throw a
+     * {@link SecurityException} when 'java.security.manager' is set to anything but
+     * <code>disallow</code>.
+     * 
+     * @see System#setSecurityManager(SecurityManager)
+     * @see SecurityManager
      */
     @Substitute
-    private static void setSecurityManager(SecurityManager s) {
-        if (s != null) {
-            /*
-             * We deliberately treat this as a non-recoverable fatal error. We want to prevent bugs
-             * where an exception is silently ignored by an application and then necessary security
-             * checks are not in place.
-             */
-            throw VMError.shouldNotReachHere("Installing a SecurityManager is not yet supported");
+    @SuppressWarnings({"removal", "javadoc"})
+    @TargetElement(onlyWith = JDK21OrEarlier.class)
+    private static void setSecurityManager(SecurityManager sm) {
+        if (sm != null) {
+            /* Read the property collected at isolate creation as that is what happens on the JVM */
+            String smp = SystemPropertiesSupport.singleton().getSavedProperties().get("java.security.manager");
+            if (smp != null && !smp.equals("disallow")) {
+                throw new SecurityException("Setting the SecurityManager is not supported by Native Image");
+            } else {
+                throw new UnsupportedOperationException(
+                                "The Security Manager is deprecated and will be removed in a future release");
+            }
         }
     }
-
 }
 
 final class NotAArch64 implements BooleanSupplier {
     @Override
     public boolean getAsBoolean() {
         return !Platform.includedIn(Platform.AARCH64.class);
+    }
+}
+
+final class IsAMD64 implements BooleanSupplier {
+    @Override
+    public boolean getAsBoolean() {
+        return Platform.includedIn(Platform.AMD64.class);
     }
 }
 
@@ -459,6 +495,14 @@ final class Target_java_lang_Math {
     @SubstrateForeignCallTarget(fullyUninterruptible = true, stubCallingConvention = false)
     public static double tan(double a) {
         return UnaryMathIntrinsicNode.compute(a, UnaryOperation.TAN);
+    }
+
+    @Substitute
+    @Uninterruptible(reason = "Must not contain a safepoint.")
+    @SubstrateForeignCallTarget(fullyUninterruptible = true, stubCallingConvention = false)
+    @TargetElement(onlyWith = IsAMD64.class)
+    public static double tanh(double a) {
+        return UnaryMathIntrinsicNode.compute(a, UnaryOperation.TANH);
     }
 
     @Substitute
@@ -503,7 +547,7 @@ final class Target_java_lang_Math {
 @Substitute
 final class Target_java_lang_ClassValue {
 
-    @RecomputeFieldValue(kind = RecomputeFieldValue.Kind.Custom, declClass = JavaLangSubstitutions.ClassValueInitializer.class)//
+    @RecomputeFieldValue(kind = RecomputeFieldValue.Kind.Custom, declClass = ClassValueInitializer.class)//
     private final ConcurrentMap<Class<?>, Object> values;
 
     @Substitute
@@ -543,8 +587,38 @@ final class Target_java_lang_ClassValue {
     }
 }
 
+class ClassValueInitializer implements FieldValueTransformerWithAvailability {
+    @Override
+    public Object transform(Object receiver, Object originalValue) {
+        ClassValue<?> v = (ClassValue<?>) receiver;
+        Map<Class<?>, Object> map = ClassValueSupport.getValues().get(v);
+        assert map != null;
+        return map;
+    }
+
+    /*
+     * We want to wait to constant fold this value until all possible HotSpot initialization code
+     * has run.
+     */
+    @Override
+    public boolean isAvailable() {
+        return BuildPhaseProvider.isHostedUniverseBuilt();
+    }
+}
+
 @TargetClass(java.lang.NullPointerException.class)
 final class Target_java_lang_NullPointerException {
+
+    /**
+     * {@link NullPointerException} overrides {@link Throwable#fillInStackTrace()} with a
+     * {@code synchronized} method which is not permitted in a {@link VMOperation}. We hand over to
+     * {@link Target_java_lang_Throwable#fillInStackTrace(int)} which already handles this properly.
+     */
+    @Substitute
+    @Platforms(InternalPlatform.NATIVE_ONLY.class)
+    Target_java_lang_Throwable fillInStackTrace() {
+        return SubstrateUtil.cast(this, Target_java_lang_Throwable.class).fillInStackTrace(0);
+    }
 
     @Substitute
     @SuppressWarnings("static-method")
@@ -564,6 +638,10 @@ final class Target_jdk_internal_loader_ClassLoaders {
 
 @TargetClass(value = jdk.internal.loader.BootLoader.class)
 final class Target_jdk_internal_loader_BootLoader {
+    // Checkstyle: stop
+    @Delete //
+    static String JAVA_HOME;
+    // Checkstyle: resume
 
     @Substitute
     static Package getDefinedPackage(String name) {
@@ -598,7 +676,7 @@ final class Target_jdk_internal_loader_BootLoader {
         return ClassForNameSupport.forNameOrNull(name, null);
     }
 
-    @SuppressWarnings("unused")
+    @SuppressWarnings({"unused", "restricted"})
     @Substitute
     private static void loadLibrary(String name) {
         System.loadLibrary(name);
@@ -629,79 +707,26 @@ final class Target_jdk_internal_loader_BootLoader {
     // Checkstyle: resume
 }
 
+@TargetClass(value = jdk.internal.logger.LoggerFinderLoader.class)
+final class Target_jdk_internal_logger_LoggerFinderLoader {
+    // Checkstyle: stop
+    @Alias @RecomputeFieldValue(kind = RecomputeFieldValue.Kind.Reset, isFinal = true)//
+    @TargetElement(onlyWith = JDK21OrEarlier.class)//
+    static Permission READ_PERMISSION;
+    // Checkstyle: resume
+}
+
 final class ClassLoaderValueMapFieldValueTransformer implements FieldValueTransformer {
     @Override
     public Object transform(Object receiver, Object originalValue) {
         if (originalValue == null) {
             return null;
         }
-
-        ConcurrentHashMap<?, ?> original = (ConcurrentHashMap<?, ?>) originalValue;
-        List<ClassLoaderValue<?>> clvs = Arrays.asList(
-                        ReflectionUtil.readField(ServicesCatalog.class, "CLV", null),
-                        ReflectionUtil.readField(ModuleLayer.class, "CLV", null));
-
-        var res = new ConcurrentHashMap<>();
-        for (ClassLoaderValue<?> clv : clvs) {
-            if (clv == null) {
-                throw VMError.shouldNotReachHere("Field must not be null. Please check what changed in the JDK.");
-            }
-            var catalog = original.get(clv);
-            if (catalog != null) {
-                res.put(clv, catalog);
-            }
-        }
-
-        return res;
+        return RuntimeClassLoaderValueSupport.instance().getClassLoaderValueMapForLoader((ClassLoader) receiver);
     }
 }
 
 /** Dummy class to have a class with the file's name. */
 public final class JavaLangSubstitutions {
 
-    public static final class StringUtil {
-        /**
-         * Returns a character from a string at {@code index} position based on the encoding format.
-         */
-        @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
-        public static char charAt(String string, int index) {
-            Target_java_lang_String str = SubstrateUtil.cast(string, Target_java_lang_String.class);
-            byte[] value = str.value;
-            if (str.isLatin1()) {
-                return Target_java_lang_StringLatin1.getChar(value, index);
-            } else {
-                return Target_java_lang_StringUTF16.getChar(value, index);
-            }
-        }
-
-        public static byte coder(String string) {
-            return SubstrateUtil.cast(string, Target_java_lang_String.class).coder();
-        }
-    }
-
-    public static final class ClassValueSupport {
-
-        /**
-         * Marker value that replaces null values in the
-         * {@link java.util.concurrent.ConcurrentHashMap}.
-         */
-        public static final Object NULL_MARKER = new Object();
-
-        final Map<ClassValue<?>, Map<Class<?>, Object>> values;
-
-        public ClassValueSupport(Map<ClassValue<?>, Map<Class<?>, Object>> map) {
-            values = map;
-        }
-    }
-
-    static class ClassValueInitializer implements FieldValueTransformer {
-        @Override
-        public Object transform(Object receiver, Object originalValue) {
-            ClassValueSupport support = ImageSingletons.lookup(ClassValueSupport.class);
-            ClassValue<?> v = (ClassValue<?>) receiver;
-            Map<Class<?>, Object> map = support.values.get(v);
-            assert map != null;
-            return map;
-        }
-    }
 }

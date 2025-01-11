@@ -29,10 +29,10 @@ import java.nio.ByteBuffer;
 import java.util.Arrays;
 import java.util.Objects;
 
+import jdk.graal.compiler.word.Word;
 import org.graalvm.nativeimage.UnmanagedMemory;
 import org.graalvm.nativeimage.c.type.CCharPointer;
 import org.graalvm.nativeimage.c.type.CTypeConversion;
-import org.graalvm.word.WordFactory;
 
 /**
  * Copy from native-bridge to avoid depenency from now. Keep in sync with native-bridge.
@@ -248,7 +248,7 @@ abstract class BinaryOutput {
         if (value == null) {
             return true;
         }
-        return value instanceof Object[] || value == null || value instanceof Boolean || value instanceof Byte ||
+        return value instanceof Object[] || value instanceof Boolean || value instanceof Byte ||
                         value instanceof Short || value instanceof Character || value instanceof Integer ||
                         value instanceof Long || value instanceof Float || value instanceof Double || value instanceof String;
     }
@@ -263,8 +263,7 @@ abstract class BinaryOutput {
      * @see #isTypedValue(Object) to find out whether a value can be serialized.
      */
     public final void writeTypedValue(Object value) throws IllegalArgumentException {
-        if (value instanceof Object[]) {
-            Object[] arr = (Object[]) value;
+        if (value instanceof Object[] arr) {
             writeByte(ARRAY);
             writeInt(arr.length);
             for (Object arrElement : arr) {
@@ -615,7 +614,7 @@ abstract class BinaryOutput {
             if (unmanaged) {
                 UnmanagedMemory.free(address);
                 byteBufferView = null;
-                address = WordFactory.nullPointer();
+                address = Word.nullPointer();
                 length = 0;
                 unmanaged = false;
                 pos = Integer.MIN_VALUE;
@@ -639,7 +638,7 @@ abstract class BinaryOutput {
                     throw new OutOfMemoryError();
                 }
                 if (unmanaged) {
-                    address = UnmanagedMemory.realloc(address, WordFactory.unsigned(newCapacity));
+                    address = UnmanagedMemory.realloc(address, Word.unsigned(newCapacity));
                 } else {
                     CCharPointer newAddress = UnmanagedMemory.malloc(newCapacity);
                     memcpy(newAddress, address, pos);

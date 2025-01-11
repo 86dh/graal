@@ -24,8 +24,8 @@
  */
 package com.oracle.svm.core.jdk;
 
+import jdk.graal.compiler.word.Word;
 import org.graalvm.nativeimage.c.function.CodePointer;
-import org.graalvm.word.WordFactory;
 
 import com.oracle.svm.core.Uninterruptible;
 import com.oracle.svm.core.code.CodeInfo;
@@ -68,7 +68,7 @@ public abstract class BacktraceDecoder {
                     backtraceIndex += BacktraceVisitor.entriesPerSourceReference();
                 } else {
                     /* Entry is a raw code pointer. */
-                    CodePointer ip = WordFactory.pointer(entry);
+                    CodePointer ip = Word.pointer(entry);
                     /* Arbitrary number of Java frames for a single native frame (inlining). */
                     framesDecoded = visitCodePointer(ip, framesDecoded, maxFramesProcessed, maxFramesDecodeLimit);
                     backtraceIndex++;
@@ -118,7 +118,7 @@ public abstract class BacktraceDecoder {
         frameInfoCursor.initialize(tetheredCodeInfo, ip, true);
         while (frameInfoCursor.advance()) {
             FrameInfoQueryResult frameInfo = frameInfoCursor.get();
-            if (!StackTraceUtils.shouldShowFrame(frameInfo, false, true, false)) {
+            if (!StackTraceUtils.shouldShowFrame(frameInfo)) {
                 /* Always ignore the frame. It is an internal frame of the VM. */
                 continue;
             }

@@ -24,11 +24,6 @@
  */
 package com.oracle.svm.hosted.phases;
 
-import jdk.graal.compiler.graph.Node;
-import jdk.graal.compiler.nodes.ConstantNode;
-import jdk.graal.compiler.nodes.StructuredGraph;
-import jdk.graal.compiler.nodes.java.LoadFieldNode;
-
 import com.oracle.graal.pointsto.BigBang;
 import com.oracle.graal.pointsto.meta.AnalysisField;
 import com.oracle.graal.pointsto.meta.AnalysisType;
@@ -36,12 +31,24 @@ import com.oracle.graal.pointsto.meta.HostedProviders;
 import com.oracle.graal.pointsto.phases.InlineBeforeAnalysisGraphDecoder;
 import com.oracle.graal.pointsto.phases.InlineBeforeAnalysisPolicy;
 import com.oracle.svm.core.classinitialization.EnsureClassInitializedNode;
+import com.oracle.svm.core.nodes.SubstrateMethodCallTargetNode;
+import com.oracle.svm.hosted.ameta.FieldValueInterceptionSupport;
+import com.oracle.svm.hosted.classinitialization.ClassInitializationSupport;
 import com.oracle.svm.hosted.classinitialization.SimulateClassInitializerSupport;
 import com.oracle.svm.hosted.fieldfolding.IsStaticFinalFieldInitializedNode;
+
+import jdk.graal.compiler.graph.Node;
+import jdk.graal.compiler.nodes.ConstantNode;
+import jdk.graal.compiler.nodes.StructuredGraph;
+import jdk.graal.compiler.nodes.ValueNode;
+import jdk.graal.compiler.nodes.java.LoadFieldNode;
+import jdk.graal.compiler.nodes.java.MethodCallTargetNode;
+import jdk.graal.compiler.replacements.nodes.ResolvedMethodHandleCallTargetNode;
 
 public class InlineBeforeAnalysisGraphDecoderImpl extends InlineBeforeAnalysisGraphDecoder {
 
     private final SimulateClassInitializerSupport simulateClassInitializerSupport = SimulateClassInitializerSupport.singleton();
+    private final FieldValueInterceptionSupport fieldValueInterceptionSupport = FieldValueInterceptionSupport.singleton();
 
     public InlineBeforeAnalysisGraphDecoderImpl(BigBang bb, InlineBeforeAnalysisPolicy policy, StructuredGraph graph, HostedProviders providers) {
         super(bb, policy, graph, providers, null);
@@ -81,7 +88,7 @@ public class InlineBeforeAnalysisGraphDecoderImpl extends InlineBeforeAnalysisGr
                  */
                 simulateClassInitializerSupport.trySimulateClassInitializer(bb, type);
             }
-            if (simulateClassInitializerSupport.isClassInitializerSimulated(type)) {
+            if (simulateClassInitializerSupport.isClassInitializerSimulated(type) && !ClassInitializationSupport.singleton().requiresInitializationNodeForTypeReached(type)) {
                 return null;
             }
         }
@@ -93,6 +100,10 @@ public class InlineBeforeAnalysisGraphDecoderImpl extends InlineBeforeAnalysisGr
         if (canonicalized != null) {
             return canonicalized;
         }
+        var intrinsified = fieldValueInterceptionSupport.tryIntrinsifyFieldLoad(providers, node);
+        if (intrinsified != null) {
+            return intrinsified;
+        }
         return node;
     }
 
@@ -102,5 +113,10 @@ public class InlineBeforeAnalysisGraphDecoderImpl extends InlineBeforeAnalysisGr
             return ConstantNode.forBoolean(true);
         }
         return node;
+    }
+
+    @Override
+    protected MethodCallTargetNode createCallTargetNode(ResolvedMethodHandleCallTargetNode t) {
+        return new SubstrateMethodCallTargetNode(t.invokeKind(), t.targetMethod(), t.arguments().toArray(ValueNode.EMPTY_ARRAY), t.returnStamp(), t.getTypeProfile());
     }
 }

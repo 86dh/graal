@@ -39,17 +39,18 @@
 # SOFTWARE.
 #
 suite = {
-  "mxversion": "6.41.0",
+  "mxversion": "7.33.0",
   "name" : "wasm",
   "groupId" : "org.graalvm.wasm",
-  "version" : "24.0.0",
+  "version" : "25.0.0",
+  "release" : False,
   "versionConflictResolution" : "latest",
-  "url" : "http://graalvm.org/",
+  "url" : "http://graalvm.org/webassembly",
   "developer" : {
-    "name" : "Truffle and Graal developers",
-    "email" : "graalvm-dev@oss.oracle.com",
-    "organization" : "Oracle Corporation",
-    "organizationUrl" : "http://www.graalvm.org/",
+    "name": "GraalVM Development",
+    "email": "graalvm-dev@oss.oracle.com",
+    "organization": "Oracle Corporation",
+    "organizationUrl": "http://www.graalvm.org/",
   },
   "scm" : {
     "url" : "https://github.com/oracle/graal",
@@ -68,7 +69,7 @@ suite = {
   },
   "libraries": {
     "JOL": {
-      "sha1" : "553a2ba27f58b71e7efb545d7d3c657761f5b596",
+      "digest" : "sha512:8adfb561c82f9b198d1d8b7bea605fc8f4418d3e199d0d6262014dc75cee5b1a2ff59ec838b6322f5ee981e7094dbc3c9fa61ee5e8bfe7793aa927e2a900c6ec",
       "maven" : {
         "groupId" : "org.openjdk.jol",
         "artifactId" : "jol-core",
@@ -87,11 +88,14 @@ suite = {
       "requires": [
         "jdk.unsupported", # sun.misc.Unsafe
       ],
-      "checkstyleVersion" : "10.7.0",
+      "checkstyleVersion" : "10.21.0",
       "javaCompliance" : "17+",
       "annotationProcessors" : ["truffle:TRUFFLE_DSL_PROCESSOR"],
       "workingSets" : "WebAssembly",
       "license" : "UPL",
+      # "JDK-8332744: [REDO] 'internal proprietary API' diagnostics if --system is configured to an earlier JDK version"
+      # is a fatal error with -Werror, can only be suppressed with `-Xlint:none`.
+      "javac.lint.overrides" : "none",
     },
 
     "org.graalvm.wasm.launcher" : {
@@ -111,6 +115,7 @@ suite = {
       "dependencies" : [
         "org.graalvm.wasm",
         "truffle:TRUFFLE_API",
+        "mx:JUNIT",
       ],
       "checkstyle" : "org.graalvm.wasm",
       "javaCompliance" : "17+",
@@ -236,6 +241,9 @@ suite = {
     "WASM" : {
       "moduleInfo" : {
         "name" : "org.graalvm.wasm",
+        "requires": [
+          "org.graalvm.collections",
+        ],
       },
       "subDir" : "src",
       "dependencies" : [
@@ -245,7 +253,7 @@ suite = {
         "truffle:TRUFFLE_API",
         "sdk:POLYGLOT",
       ],
-      "description" : "GraalWasm, an engine for the WebAssembly language in GraalVM.",
+      "description" : "GraalWasm, a high-performance embeddable WebAssembly runtime for Java. This artifact includes the core language runtime. It is not recommended to depend on the artifact directly. Instead, use `org.graalvm.polyglot:wasm` or `org.graalvm.polyglot:wasm-community` to ensure all dependencies are pulled in correctly.", # pylint: disable=line-too-long
       "allowsJavadocWarnings": True,
       "license" : "UPL",
       "maven" : {
@@ -262,11 +270,10 @@ suite = {
         "truffle:TRUFFLE_RUNTIME",
       ],
       "maven": {
-        "groupId": "org.graalvm.polyglot",
         "artifactId": "wasm-community",
         "tag": ["default", "public"],
       },
-      "description": "Graal WASM engine.",
+      "description": "GraalWasm, a high-performance embeddable WebAssembly runtime for Java. This POM dependency pulls in GraalWasm dependencies and Truffle Community Edition.",
       "license": "UPL",
     },
 
@@ -275,6 +282,9 @@ suite = {
         "name" : "org.graalvm.wasm.launcher",
         "exports" : [
           "org.graalvm.wasm.launcher to org.graalvm.launcher",
+        ],
+        "requires": [
+          "org.graalvm.polyglot",
         ],
       },
       "subDir" : "src",

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -395,8 +395,8 @@ public class AArch64ControlFlow {
      * <ol>
      * <li>Determine whether the index is within the JumpTable. This is accomplished by first
      * normalizing the index (normalizedIdx == index - lowKey), and then checking whether
-     * <code>(unsigned(normalizedIdx) <= highKey - lowKey</code>). If not, then one must jump to the
-     * defaultTarget.</li>
+     * <code>(unsigned(normalizedIdx) &lt;= highKey - lowKey</code>). If not, then one must jump to
+     * the defaultTarget.</li>
      *
      * <li>If normalizedIdx is within the JumpTable, then jump to JumpTableStart +
      * JumpTable[normalizedIdx].</li>
@@ -457,11 +457,15 @@ public class AArch64ControlFlow {
             // jump to target
             masm.jmp(scratch);
 
-            masm.bind(jumpTable);
-            // emit jump table entries
-            targets.forEach(label -> masm.emitJumpTableOffset(jumpTable, label));
-            JumpTable jt = new JumpTable(jumpTable.position(), lowKey, highKey, EntryFormat.OFFSET_ONLY);
-            crb.compilationResult.addAnnotation(jt);
+            crb.getLIR().addSlowPath(null, () -> {
+                // Insert halt so that static analyzers do not continue decoding past this point
+                masm.halt();
+                masm.bind(jumpTable);
+                // emit jump table entries
+                targets.forEach(label -> masm.emitJumpTableOffset(jumpTable, label));
+                JumpTable jt = new JumpTable(jumpTable.position(), lowKey, highKey, EntryFormat.OFFSET_ONLY);
+                crb.compilationResult.addAnnotation(jt);
+            });
         }
     }
 
@@ -542,18 +546,22 @@ public class AArch64ControlFlow {
                     masm.jmp(jumpTableBase);
                 }
 
-                // ensure jump table is aligned with the entry size
-                masm.align(format.size);
-                masm.bind(jumpTable);
-                // emit jump table entries
-                for (int i = 0; i < targets.length; i++) {
-                    if (format == EntryFormat.VALUE_AND_OFFSET) {
-                        masm.emitInt(keys[i].asInt());
+                crb.getLIR().addSlowPath(this, () -> {
+                    // Insert halt so that static analyzers do not continue decoding past this point
+                    masm.halt();
+                    // ensure jump table is aligned with the entry size
+                    masm.align(format.size);
+                    masm.bind(jumpTable);
+                    // emit jump table entries
+                    for (int i = 0; i < targets.length; i++) {
+                        if (format == EntryFormat.VALUE_AND_OFFSET) {
+                            masm.emitInt(keys[i].asInt());
+                        }
+                        masm.emitJumpTableOffset(jumpTable, targets[i].label());
                     }
-                    masm.emitJumpTableOffset(jumpTable, targets[i].label());
-                }
-                JumpTable jt = new JumpTable(jumpTable.position(), 0, keys.length - 1, format);
-                crb.compilationResult.addAnnotation(jt);
+                    JumpTable jt = new JumpTable(jumpTable.position(), 0, keys.length - 1, format);
+                    crb.compilationResult.addAnnotation(jt);
+                });
             }
         }
     }

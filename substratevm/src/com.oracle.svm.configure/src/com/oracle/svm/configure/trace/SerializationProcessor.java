@@ -30,11 +30,14 @@ import static com.oracle.svm.configure.trace.LazyValueUtils.lazyValue;
 import java.util.List;
 
 import org.graalvm.collections.EconomicMap;
-import jdk.graal.compiler.java.LambdaUtils;
-import org.graalvm.nativeimage.impl.ConfigurationCondition;
+import org.graalvm.nativeimage.impl.UnresolvedConfigurationCondition;
 
 import com.oracle.svm.configure.config.ConfigurationSet;
 import com.oracle.svm.configure.config.SerializationConfiguration;
+import com.oracle.svm.configure.config.TypeConfiguration;
+import com.oracle.svm.core.configure.NamedConfigurationTypeDescriptor;
+
+import jdk.graal.compiler.java.LambdaUtils;
 
 public class SerializationProcessor extends AbstractProcessor {
     private final AccessAdvisor advisor;
@@ -47,16 +50,17 @@ public class SerializationProcessor extends AbstractProcessor {
     @SuppressWarnings("unchecked")
     void processEntry(EconomicMap<String, ?> entry, ConfigurationSet configurationSet) {
         boolean invalidResult = Boolean.FALSE.equals(entry.get("result"));
-        ConfigurationCondition condition = ConfigurationCondition.alwaysTrue();
         if (invalidResult) {
             return;
         }
+        UnresolvedConfigurationCondition condition = UnresolvedConfigurationCondition.alwaysTrue();
         String function = (String) entry.get("function");
         List<?> args = (List<?>) entry.get("args");
         SerializationConfiguration serializationConfiguration = configurationSet.getSerializationConfiguration();
+        TypeConfiguration reflectionConfiguration = configurationSet.getReflectionConfiguration();
 
         if ("ObjectStreamClass.<init>".equals(function) || "ObjectInputStream.readClassDescriptor".equals(function)) {
-            expectSize(args, 2);
+            expectSize(args, 1);
 
             if (advisor.shouldIgnore(LazyValueUtils.lazyValue((String) args.get(0)), LazyValueUtils.lazyValue(null), false)) {
                 return;
@@ -67,7 +71,7 @@ public class SerializationProcessor extends AbstractProcessor {
             if (className.contains(LambdaUtils.LAMBDA_CLASS_NAME_SUBSTRING)) {
                 serializationConfiguration.registerLambdaCapturingClass(condition, className);
             } else {
-                serializationConfiguration.registerWithTargetConstructorClass(condition, className, (String) args.get(1));
+                reflectionConfiguration.getOrCreateType(condition, new NamedConfigurationTypeDescriptor(className)).setSerializable();
             }
         } else if ("SerializedLambda.readResolve".equals(function)) {
             expectSize(args, 1);

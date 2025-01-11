@@ -29,10 +29,9 @@ import java.security.ProtectionDomain;
 import java.util.ArrayDeque;
 import java.util.Objects;
 
-import com.oracle.svm.core.threadlocal.FastThreadLocalFactory;
-import com.oracle.svm.core.threadlocal.FastThreadLocalObject;
-import com.oracle.svm.core.util.VMError;
 import com.oracle.svm.util.ReflectionUtil;
+
+import jdk.graal.compiler.serviceprovider.JavaVersionUtil;
 
 /**
  * Stack for storing AccessControlContexts. Used in conjunction with
@@ -59,13 +58,7 @@ class PrivilegedStack {
     }
 
     /* Local AccessControlContext stack */
-    private static final FastThreadLocalObject<ArrayDeque<StackElement>> stack;
-
-    static {
-        @SuppressWarnings("unchecked")
-        Class<ArrayDeque<StackElement>> cls = (Class<ArrayDeque<StackElement>>) (Object) ArrayDeque.class;
-        stack = FastThreadLocalFactory.createObject(cls, "PrivilegedStack.AccessControlContextStack");
-    }
+    private static final ThreadLocal<ArrayDeque<StackElement>> stack = new ThreadLocal<>();
 
     @SuppressWarnings("unchecked")
     private static ArrayDeque<StackElement> getStack() {
@@ -112,10 +105,7 @@ public class AccessControllerUtil {
     public static final AccessControlContext DISALLOWED_CONTEXT_MARKER;
 
     static {
-        try {
-            DISALLOWED_CONTEXT_MARKER = ReflectionUtil.lookupConstructor(AccessControlContext.class, ProtectionDomain[].class, boolean.class).newInstance(new ProtectionDomain[0], true);
-        } catch (ReflectiveOperationException ex) {
-            throw VMError.shouldNotReachHere(ex);
-        }
+        DISALLOWED_CONTEXT_MARKER = JavaVersionUtil.JAVA_SPEC > 21 ? null
+                        : ReflectionUtil.newInstance(ReflectionUtil.lookupConstructor(AccessControlContext.class, ProtectionDomain[].class, boolean.class), new ProtectionDomain[0], true);
     }
 }

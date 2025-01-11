@@ -24,7 +24,7 @@
 package com.oracle.truffle.espresso.nodes.quick.invoke;
 
 import com.oracle.truffle.api.frame.VirtualFrame;
-import com.oracle.truffle.espresso.descriptors.Signatures;
+import com.oracle.truffle.espresso.classfile.descriptors.Signatures;
 import com.oracle.truffle.espresso.impl.Method;
 import com.oracle.truffle.espresso.nodes.EspressoFrame;
 import com.oracle.truffle.espresso.nodes.quick.QuickNode;
@@ -33,7 +33,7 @@ import com.oracle.truffle.espresso.runtime.staticobject.StaticObject;
 public abstract class InvokeQuickNode extends QuickNode {
     private static final Object[] EMPTY_ARGS = new Object[0];
 
-    protected final Method.MethodVersion method;
+    public final Method.MethodVersion method;
 
     // Helper information for easier arguments handling.
     protected final int resultAt;
@@ -59,8 +59,13 @@ public abstract class InvokeQuickNode extends QuickNode {
         this.returnsPrimitive = m.getReturnKind().isPrimitive();
     }
 
-    public StaticObject peekReceiver(VirtualFrame frame) {
+    public final StaticObject peekReceiver(VirtualFrame frame) {
         return EspressoFrame.peekReceiver(frame, top, method.getMethod());
+    }
+
+    @Override
+    public int execute(VirtualFrame frame, boolean isContinuationResume) {
+        return 0;
     }
 
     protected Object[] getArguments(VirtualFrame frame) {
@@ -119,7 +124,7 @@ public abstract class InvokeQuickNode extends QuickNode {
     }
 
     @Override
-    public String toString() {
+    public final String toString() {
         return "INVOKE: " + method.getDeclaringKlass().getExternalName() + "." + method.getNameAsString() + ":" + method.getRawSignature();
     }
 }

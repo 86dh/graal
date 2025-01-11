@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2023, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -32,6 +32,7 @@ import java.lang.module.ModuleDescriptor;
 import java.lang.module.ModuleReader;
 import java.lang.module.ModuleReference;
 import java.lang.module.ResolvedModule;
+import java.lang.reflect.Method;
 import java.net.MalformedURLException;
 import java.net.URI;
 import java.net.URL;
@@ -57,9 +58,10 @@ import java.util.jar.Manifest;
 import java.util.stream.Stream;
 
 import com.oracle.svm.core.util.UserError;
+import com.oracle.svm.util.ReflectionUtil;
 
+import jdk.graal.compiler.serviceprovider.JavaVersionUtil;
 import jdk.internal.access.SharedSecrets;
-import jdk.internal.loader.BootLoader;
 import jdk.internal.loader.ClassLoaders;
 import jdk.internal.loader.Resource;
 import jdk.internal.loader.URLClassPath;
@@ -81,7 +83,7 @@ import jdk.internal.module.Resources;
  * in {@code jdk.internal.loader.Loader} and {@code URLClassLoader}. More documentation is available
  * in the original classes.
  */
-final class NativeImageClassLoader extends SecureClassLoader {
+public final class NativeImageClassLoader extends SecureClassLoader {
 
     static {
         ClassLoader.registerAsParallelCapable();
@@ -138,6 +140,11 @@ final class NativeImageClassLoader extends SecureClassLoader {
         }
     }
 
+    // Use reflection for JDK21 compatibility
+    private final Method findResource;
+    private final Method findResources;
+    private final Method getResource;
+
     /**
      * See {@code jdk.internal.loader.Loader#Loader} and
      * {@code java.net.URLClassLoader#URLClassLoader}.
@@ -145,6 +152,7 @@ final class NativeImageClassLoader extends SecureClassLoader {
     NativeImageClassLoader(List<Path> classpath, Configuration configuration, ClassLoader parent) {
         super(parent);
 
+        Objects.requireNonNull(parent);
         this.parent = parent;
 
         Map<String, ModuleReference> nameToModule = new HashMap<>();
@@ -172,14 +180,28 @@ final class NativeImageClassLoader extends SecureClassLoader {
         moduleToReader = new ConcurrentHashMap<>();
 
         /* Initialize URLClassPath that is used to lookup classes from class-path. */
-        ucp = new URLClassPath(classpath.stream().map(NativeImageClassLoader::pathToURL).toArray(URL[]::new), null);
+        ucp = new URLClassPath(classpath.stream().map(NativeImageClassLoader::toURL).toArray(URL[]::new), null);
+
+        if (JavaVersionUtil.JAVA_SPEC == 21) {
+            findResource = ReflectionUtil.lookupMethod(URLClassPath.class, "findResource", String.class, boolean.class);
+            findResources = ReflectionUtil.lookupMethod(URLClassPath.class, "findResources", String.class, boolean.class);
+            getResource = ReflectionUtil.lookupMethod(URLClassPath.class, "getResource", String.class, boolean.class);
+        } else {
+            findResource = ReflectionUtil.lookupMethod(URLClassPath.class, "findResource", String.class);
+            findResources = ReflectionUtil.lookupMethod(URLClassPath.class, "findResources", String.class);
+            getResource = ReflectionUtil.lookupMethod(URLClassPath.class, "getResource", String.class);
+        }
     }
 
-    private static URL pathToURL(Path p) {
+    public static URL toURL(Path p) {
+        return toURL(p.toUri());
+    }
+
+    public static URL toURL(URI uri) {
         try {
-            return p.toUri().toURL();
+            return uri.toURL();
         } catch (MalformedURLException e) {
-            throw UserError.abort(e, "Given path element '%s' cannot be expressed as URL.", p);
+            throw UserError.abort(e, "Given URI '%s' cannot be expressed as URL.", uri);
         }
     }
 
@@ -258,6 +280,14 @@ final class NativeImageClassLoader extends SecureClassLoader {
                         .findAny();
     }
 
+    private URL findResourceByName(String name) {
+        if (JavaVersionUtil.JAVA_SPEC == 21) {
+            return ReflectionUtil.invokeMethod(findResource, ucp, name, false);
+        } else {
+            return ReflectionUtil.invokeMethod(findResource, ucp, name);
+        }
+    }
+
     /**
      * See {@code jdk.internal.loader.Loader#findResource(String mn, String name)}.
      */
@@ -265,11 +295,11 @@ final class NativeImageClassLoader extends SecureClassLoader {
     protected URL findResource(String mn, String name) throws IOException {
         /* For unnamed module, search for resource in class-path */
         if (mn == null) {
-            return ucp.findResource(name, false);
+            return findResourceByName(name);
         }
 
         /* otherwise search in specific module */
-        ModuleReference mref = (mn != null) ? localNameToModule.get(mn) : null;
+        ModuleReference mref = localNameToModule.get(mn);
         if (mref == null) {
             return null;
         }
@@ -294,7 +324,7 @@ final class NativeImageClassLoader extends SecureClassLoader {
         String pn = Resources.toPackageName(name);
 
         /* Search for resource in class-path ... */
-        URL urlOnClasspath = ucp.findResource(name, false);
+        URL urlOnClasspath = findResourceByName(name);
         if (urlOnClasspath != null) {
             return urlOnClasspath;
         }
@@ -344,11 +374,7 @@ final class NativeImageClassLoader extends SecureClassLoader {
 
         URL url = findResource(name);
         if (url == null) {
-            if (parent != null) {
-                url = parent.getResource(name);
-            } else {
-                url = BootLoader.findResource(name);
-            }
+            url = parent.getResource(name);
         }
         return url;
     }
@@ -361,13 +387,7 @@ final class NativeImageClassLoader extends SecureClassLoader {
         Objects.requireNonNull(name);
 
         List<URL> urls = findResourcesAsList(name);
-
-        Enumeration<URL> e;
-        if (parent != null) {
-            e = parent.getResources(name);
-        } else {
-            e = BootLoader.findResources(name);
-        }
+        Enumeration<URL> e = parent.getResources(name);
 
         return new Enumeration<>() {
             final Iterator<URL> iterator = urls.iterator();
@@ -388,6 +408,14 @@ final class NativeImageClassLoader extends SecureClassLoader {
         };
     }
 
+    private Enumeration<URL> findResourcesByName(String name) {
+        if (JavaVersionUtil.JAVA_SPEC == 21) {
+            return ReflectionUtil.invokeMethod(findResources, ucp, name, false);
+        } else {
+            return ReflectionUtil.invokeMethod(findResources, ucp, name);
+        }
+    }
+
     /**
      * See {@code jdk.internal.loader.Loader#findResourcesAsList}.
      */
@@ -397,7 +425,7 @@ final class NativeImageClassLoader extends SecureClassLoader {
         List<URL> urls = new ArrayList<>();
 
         /* Search for resource in class-path ... */
-        Enumeration<URL> classPathResources = ucp.findResources(name, false);
+        Enumeration<URL> classPathResources = findResourcesByName(name);
         while (classPathResources.hasMoreElements()) {
             urls.add(classPathResources.nextElement());
         }
@@ -439,14 +467,21 @@ final class NativeImageClassLoader extends SecureClassLoader {
         return c;
     }
 
+    private Resource getResourceByPath(String path) {
+        if (JavaVersionUtil.JAVA_SPEC == 21) {
+            return ReflectionUtil.invokeMethod(getResource, ucp, path, false);
+        } else {
+            return ReflectionUtil.invokeMethod(getResource, ucp, path);
+        }
+    }
+
     /**
      * See {@code java.net.URLClassLoader#findClass(java.lang.String)}.
      */
     private Class<?> findClassViaClassPath(String name) throws ClassNotFoundException {
         Class<?> result;
-
         String path = name.replace('.', '/').concat(".class");
-        Resource res = ucp.getResource(path, false);
+        Resource res = getResourceByPath(path);
         if (res != null) {
             try {
                 result = defineClass(name, res);
@@ -625,7 +660,7 @@ final class NativeImageClassLoader extends SecureClassLoader {
                 try {
                     c = parent.loadClass(cn);
                 } catch (ClassNotFoundException ignore) {
-                    c = null;
+                    /* Ignore. */
                 }
             }
 
@@ -636,9 +671,7 @@ final class NativeImageClassLoader extends SecureClassLoader {
                     c = findClassInModuleOrNull(loadedModule, cn);
                 } else {
                     /* Not found in modules of this loader, try class-path instead */
-                    if (c == null) {
-                        c = findClassViaClassPath(cn);
-                    }
+                    c = findClassViaClassPath(cn);
 
                     if (c == null) {
                         String pn = packageName(cn);
@@ -646,11 +679,7 @@ final class NativeImageClassLoader extends SecureClassLoader {
                         if (loader == null) {
                             loader = parent;
                         }
-                        if (loader == null) {
-                            c = BootLoader.loadClassOrNull(cn);
-                        } else {
-                            c = loader.loadClass(cn);
-                        }
+                        c = loader.loadClass(cn);
                     }
                 }
             }
@@ -765,7 +794,7 @@ final class NativeImageClassLoader extends SecureClassLoader {
     /**
      * See {@code jdk.internal.loader.Loader#NullModuleReader}.
      */
-    private static class NullModuleReader implements ModuleReader {
+    private static final class NullModuleReader implements ModuleReader {
         @Override
         public Optional<URI> find(String name) {
             return Optional.empty();

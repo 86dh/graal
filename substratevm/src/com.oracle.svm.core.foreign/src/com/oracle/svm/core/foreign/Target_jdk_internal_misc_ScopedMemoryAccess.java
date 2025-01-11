@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2023, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -28,6 +28,10 @@ import static com.oracle.svm.core.util.VMError.unsupportedFeature;
 
 import com.oracle.svm.core.annotate.Substitute;
 import com.oracle.svm.core.annotate.TargetClass;
+import com.oracle.svm.core.annotate.TargetElement;
+import com.oracle.svm.core.jdk.JDK21OrEarlier;
+import com.oracle.svm.core.jdk.JDKLatest;
+import com.oracle.svm.core.util.BasedOnJDKFile;
 
 import jdk.internal.foreign.MemorySessionImpl;
 
@@ -36,7 +40,9 @@ import jdk.internal.foreign.MemorySessionImpl;
  * <p>
  * It seems like this could be easily supported once thread-local handshakes are supported.
  */
-@TargetClass(className = "jdk.internal.misc.ScopedMemoryAccess")
+@BasedOnJDKFile("https://github.com/openjdk/jdk/blob/jdk-24+15/src/java.base/share/classes/jdk/internal/misc/X-ScopedMemoryAccess-bin.java.template")
+@BasedOnJDKFile("https://github.com/openjdk/jdk/blob/jdk-25+2/src/java.base/share/classes/jdk/internal/misc/X-ScopedMemoryAccess.java.template")
+@TargetClass(className = "jdk.internal.misc.ScopedMemoryAccess", onlyWith = ForeignFunctionsEnabled.class)
 public final class Target_jdk_internal_misc_ScopedMemoryAccess {
     @Substitute
     static void registerNatives() {
@@ -65,7 +71,18 @@ public final class Target_jdk_internal_misc_ScopedMemoryAccess {
      * As one might notice, what is not supported is not creating shared arenas, but closing them.
      */
     @Substitute
-    boolean closeScope0(MemorySessionImpl session) {
-        throw unsupportedFeature("Arena.ofShared is not yet supported.");
+    @TargetElement(onlyWith = JDKLatest.class)
+    void closeScope0(MemorySessionImpl session, Target_jdk_internal_misc_ScopedMemoryAccess_ScopedAccessError error) {
+        throw unsupportedFeature("GR-52276: Arena.ofShared not supported");
     }
+
+    @Substitute
+    @TargetElement(onlyWith = JDK21OrEarlier.class)
+    boolean closeScope0(MemorySessionImpl session) {
+        throw unsupportedFeature("GR-52276: Arena.ofShared not supported");
+    }
+}
+
+@TargetClass(className = "jdk.internal.misc.ScopedMemoryAccess$ScopedAccessError", onlyWith = {JDKLatest.class, ForeignFunctionsEnabled.class})
+final class Target_jdk_internal_misc_ScopedMemoryAccess_ScopedAccessError {
 }

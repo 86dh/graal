@@ -24,12 +24,12 @@
  */
 package com.oracle.svm.core.code;
 
+import jdk.graal.compiler.word.Word;
 import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.c.function.CodePointer;
 import org.graalvm.word.Pointer;
 import org.graalvm.word.PointerBase;
 import org.graalvm.word.UnsignedWord;
-import org.graalvm.word.WordFactory;
 
 import com.oracle.svm.core.deopt.SubstrateInstalledCode;
 import com.oracle.svm.core.heap.VMOperationInfos;
@@ -39,21 +39,19 @@ import com.oracle.svm.core.util.VMError;
 
 public class AbstractRuntimeCodeInstaller {
     protected Pointer allocateCodeMemory(long size) {
-        PointerBase result = RuntimeCodeInfoAccess.allocateCodeMemory(WordFactory.unsigned(size));
+        PointerBase result = RuntimeCodeInfoAccess.allocateCodeMemory(Word.unsigned(size));
         if (result.isNull()) {
-            throw new OutOfMemoryError();
+            throw new OutOfMemoryError("Could not allocate memory for runtime-compiled code.");
         }
         return (Pointer) result;
     }
 
     protected void makeCodeMemoryExecutableReadOnly(Pointer start, UnsignedWord size) {
-        int result = RuntimeCodeInfoAccess.makeCodeMemoryExecutableReadOnly((CodePointer) start, size);
-        VMError.guarantee(result == 0, "Failed to make code memory read only.");
+        RuntimeCodeInfoAccess.makeCodeMemoryExecutableReadOnly((CodePointer) start, size);
     }
 
     protected void makeCodeMemoryExecutableWritable(Pointer start, UnsignedWord size) {
-        int result = RuntimeCodeInfoAccess.makeCodeMemoryExecutableWritable((CodePointer) start, size);
-        VMError.guarantee(result == 0, "Failed to make code memory writable.");
+        RuntimeCodeInfoAccess.makeCodeMemoryExecutableWritable((CodePointer) start, size);
     }
 
     protected static void doInstallPrepared(SharedMethod method, CodeInfo codeInfo, SubstrateInstalledCode installedCode) {

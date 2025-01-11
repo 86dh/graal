@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -63,6 +63,7 @@ import java.util.Map.Entry;
 import java.util.Objects;
 import java.util.Set;
 
+import javax.lang.model.element.AnnotationMirror;
 import javax.lang.model.element.Element;
 import javax.lang.model.element.ElementKind;
 import javax.lang.model.element.ExecutableElement;
@@ -87,6 +88,7 @@ import com.oracle.truffle.dsl.processor.generator.FlatNodeGenFactory;
 import com.oracle.truffle.dsl.processor.generator.FlatNodeGenFactory.GeneratorMode;
 import com.oracle.truffle.dsl.processor.generator.GeneratorUtils;
 import com.oracle.truffle.dsl.processor.generator.NodeConstants;
+import com.oracle.truffle.dsl.processor.generator.NodeGeneratorPlugs;
 import com.oracle.truffle.dsl.processor.generator.StaticConstants;
 import com.oracle.truffle.dsl.processor.java.ElementUtils;
 import com.oracle.truffle.dsl.processor.java.model.CodeAnnotationMirror;
@@ -637,7 +639,7 @@ public class ExportsGenerator extends CodeTypeElementFactory<ExportsData> {
                     break;
                 }
                 FlatNodeGenFactory factory = new FlatNodeGenFactory(context, GeneratorMode.EXPORTED_MESSAGE, acceptsMessage.getSpecializedNode(),
-                                cachedSharedNodes, libraryExports.getSharedExpressions(), constants, nodeConstants);
+                                cachedSharedNodes, libraryExports.getSharedExpressions(), constants, nodeConstants, NodeGeneratorPlugs.DEFAULT);
                 List<CacheExpression> caches = new ArrayList<>();
                 for (CacheKey key : eagerCaches.keySet()) {
                     caches.add(key.cache);
@@ -753,14 +755,14 @@ public class ExportsGenerator extends CodeTypeElementFactory<ExportsData> {
         cacheClass.addOptional(accepts);
 
         if (useSingleton(libraryExports, messages, true)) {
-            CodeExecutableElement isAdoptable = cacheClass.add(CodeExecutableElement.clone(ElementUtils.findExecutableElement(types.Node, "isAdoptable")));
-            builder = isAdoptable.createBuilder();
             if (libraryExports.needsDynamicDispatch()) {
+                CodeExecutableElement isAdoptable = cacheClass.add(CodeExecutableElement.clone(ElementUtils.findExecutableElement(types.Node, "isAdoptable")));
+                builder = isAdoptable.createBuilder();
                 builder.startReturn();
                 builder.startCall("dynamicDispatch_", "isAdoptable").end();
                 builder.end();
             } else {
-                builder.returnFalse();
+                cacheClass.getImplements().add(types.UnadoptableNode);
             }
         }
 
@@ -817,7 +819,7 @@ public class ExportsGenerator extends CodeTypeElementFactory<ExportsData> {
                 boolean shared = true;
                 if (dummyNodeClass == null) {
                     FlatNodeGenFactory factory = new FlatNodeGenFactory(context, GeneratorMode.EXPORTED_MESSAGE, cachedSpecializedNode, cachedSharedNodes, libraryExports.getSharedExpressions(),
-                                    constants, nodeConstants);
+                                    constants, nodeConstants, NodeGeneratorPlugs.DEFAULT);
                     dummyNodeClass = createClass(libraryExports, null, modifiers(), "Cached", types.Node);
                     factory.create(dummyNodeClass);
                     sharedNodes.put(cachedSpecializedNode, dummyNodeClass);
@@ -915,7 +917,7 @@ public class ExportsGenerator extends CodeTypeElementFactory<ExportsData> {
             }
         }
 
-        nodeConstants.prependToClass(cacheClass);
+        nodeConstants.addToClass(cacheClass);
 
         return cacheClass;
     }
@@ -1280,15 +1282,7 @@ public class ExportsGenerator extends CodeTypeElementFactory<ExportsData> {
         }
 
         if (!isExtendsExports) {
-            CodeExecutableElement isAdoptable = uncachedClass.add(CodeExecutableElement.clone(ElementUtils.findExecutableElement(types.Node, "isAdoptable")));
-            ElementUtils.setFinal(isAdoptable.getModifiers(), !isFinalExports);
-            isAdoptable.createBuilder().returnFalse();
-        }
-
-        if (!isExtendsExports) {
-            CodeExecutableElement getCost = uncachedClass.add(CodeExecutableElement.clone(ElementUtils.findExecutableElement(types.Node, "getCost")));
-            ElementUtils.setFinal(getCost.getModifiers(), !isFinalExports);
-            getCost.createBuilder().startReturn().staticReference(ElementUtils.findVariableElement(types.NodeCost, "MEGAMORPHIC")).end();
+            uncachedClass.getImplements().add(types.UnadoptableNode);
         }
 
         boolean firstNode = true;
@@ -1319,7 +1313,7 @@ public class ExportsGenerator extends CodeTypeElementFactory<ExportsData> {
                 }
             } else {
                 FlatNodeGenFactory factory = new FlatNodeGenFactory(context, GeneratorMode.EXPORTED_MESSAGE, uncachedSpecializedNode, uncachedSharedNodes, Collections.emptyMap(), constants,
-                                nodeConstants);
+                                nodeConstants, NodeGeneratorPlugs.DEFAULT);
                 CodeExecutableElement generatedUncached = factory.createUncached();
                 if (firstNode) {
                     uncachedClass.getEnclosedElements().addAll(factory.createUncachedFields());
@@ -1357,7 +1351,7 @@ public class ExportsGenerator extends CodeTypeElementFactory<ExportsData> {
             }
 
         }
-        nodeConstants.prependToClass(uncachedClass);
+        nodeConstants.addToClass(uncachedClass);
         return uncachedClass;
 
     }
@@ -1385,6 +1379,18 @@ public class ExportsGenerator extends CodeTypeElementFactory<ExportsData> {
             GeneratorUtils.addBoundaryOrTransferToInterpreter(cachedExecute, builder);
             builder.startThrow().startNew(context.getType(AbstractMethodError.class)).end().end();
         } else {
+            /*
+             * If the @ExportMessage annotated method already has a @TruffleBoundary, might as well
+             * copy over the @TruffleBoundary to the delegating cached library method. This reduces
+             * the number of useless runtime compiled methods. Note that we want to preserve any
+             * annotation attributes like @TruffleBoundary(transferToInterpreterOnException=false).
+             */
+            if (targetMethod != null) {
+                AnnotationMirror existingTruffleBoundary = ElementUtils.findAnnotationMirror(targetMethod, types.CompilerDirectives_TruffleBoundary);
+                if (existingTruffleBoundary != null) {
+                    cachedExecute.addAnnotationMirror(existingTruffleBoundary);
+                }
+            }
             builder.startReturn();
             if (targetMethod == null) {
                 builder.startCall("super", message.getName());

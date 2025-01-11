@@ -36,7 +36,23 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
-import jdk.graal.compiler.api.replacements.SnippetReflectionProvider;
+import org.graalvm.nativeimage.ImageSingletons;
+
+import com.oracle.graal.pointsto.meta.AnalysisType;
+import com.oracle.svm.core.ParsingReason;
+import com.oracle.svm.core.c.CGlobalData;
+import com.oracle.svm.core.c.CGlobalDataImpl;
+import com.oracle.svm.core.c.CGlobalDataNonConstantRegistry;
+import com.oracle.svm.core.config.ConfigurationValues;
+import com.oracle.svm.core.feature.AutomaticallyRegisteredFeature;
+import com.oracle.svm.core.feature.InternalFeature;
+import com.oracle.svm.core.graal.code.CGlobalDataInfo;
+import com.oracle.svm.core.graal.nodes.CGlobalDataLoadAddressNode;
+import com.oracle.svm.core.util.VMError;
+import com.oracle.svm.hosted.image.RelocatableBuffer;
+import com.oracle.svm.hosted.meta.HostedSnippetReflectionProvider;
+import com.oracle.svm.util.ReflectionUtil;
+
 import jdk.graal.compiler.core.common.memory.BarrierType;
 import jdk.graal.compiler.core.common.memory.MemoryOrderMode;
 import jdk.graal.compiler.core.common.type.IntegerStamp;
@@ -67,23 +83,6 @@ import jdk.graal.compiler.nodes.java.LoadFieldNode;
 import jdk.graal.compiler.nodes.memory.ReadNode;
 import jdk.graal.compiler.nodes.memory.address.OffsetAddressNode;
 import jdk.graal.compiler.phases.util.Providers;
-import org.graalvm.nativeimage.ImageSingletons;
-
-import com.oracle.graal.pointsto.meta.AnalysisType;
-import com.oracle.svm.core.ParsingReason;
-import com.oracle.svm.core.c.CGlobalData;
-import com.oracle.svm.core.c.CGlobalDataImpl;
-import com.oracle.svm.core.c.CGlobalDataNonConstantRegistry;
-import com.oracle.svm.core.config.ConfigurationValues;
-import com.oracle.svm.core.feature.AutomaticallyRegisteredFeature;
-import com.oracle.svm.core.feature.InternalFeature;
-import com.oracle.svm.core.graal.code.CGlobalDataInfo;
-import com.oracle.svm.core.graal.nodes.CGlobalDataLoadAddressNode;
-import com.oracle.svm.core.util.VMError;
-import com.oracle.svm.hosted.image.RelocatableBuffer;
-import com.oracle.svm.hosted.meta.HostedSnippetReflectionProvider;
-import com.oracle.svm.util.ReflectionUtil;
-
 import jdk.vm.ci.meta.JavaConstant;
 import jdk.vm.ci.meta.ResolvedJavaMethod;
 import jdk.vm.ci.meta.ResolvedJavaType;
@@ -105,7 +104,7 @@ public class CGlobalDataFeature implements InternalFeature {
         return ImageSingletons.lookup(CGlobalDataFeature.class);
     }
 
-    private boolean isLayouted() {
+    private boolean isLaidOut() {
         return totalSize != -1;
     }
 
@@ -121,16 +120,16 @@ public class CGlobalDataFeature implements InternalFeature {
     }
 
     @Override
-    public void registerInvocationPlugins(Providers providers, SnippetReflectionProvider snippetReflection, Plugins plugins, ParsingReason reason) {
+    public void registerInvocationPlugins(Providers providers, Plugins plugins, ParsingReason reason) {
         Registration r = new Registration(plugins.getInvocationPlugins(), CGlobalData.class);
         r.register(new RequiredInvocationPlugin("get", Receiver.class) {
             @Override
             public boolean apply(GraphBuilderContext b, ResolvedJavaMethod targetMethod, Receiver receiver) {
-                assert snippetReflection instanceof HostedSnippetReflectionProvider;
-                JavaConstant nonConstantRegistryJavaConstant = snippetReflection.forObject(nonConstantRegistry);
-                ValueNode cGlobalDataNode = receiver.get();
+                assert providers.getSnippetReflection() instanceof HostedSnippetReflectionProvider;
+                JavaConstant nonConstantRegistryJavaConstant = providers.getSnippetReflection().forObject(nonConstantRegistry);
+                ValueNode cGlobalDataNode = receiver.get(true);
                 if (cGlobalDataNode.isConstant()) {
-                    CGlobalDataImpl<?> data = snippetReflection.asObject(CGlobalDataImpl.class, cGlobalDataNode.asJavaConstant());
+                    CGlobalDataImpl<?> data = providers.getSnippetReflection().asObject(CGlobalDataImpl.class, cGlobalDataNode.asJavaConstant());
                     CGlobalDataInfo info = CGlobalDataFeature.this.map.get(data);
                     b.addPush(targetMethod.getSignature().getReturnKind(), new CGlobalDataLoadAddressNode(info));
                 } else {
@@ -188,7 +187,7 @@ public class CGlobalDataFeature implements InternalFeature {
 
     public CGlobalDataInfo registerAsAccessedOrGet(CGlobalData<?> obj) {
         CGlobalDataImpl<?> data = (CGlobalDataImpl<?>) obj;
-        VMError.guarantee(!isLayouted() || map.containsKey(data), "CGlobalData instance must have been discovered/registered before or during analysis");
+        VMError.guarantee(!isLaidOut() || map.containsKey(data), "CGlobalData instance must have been discovered/registered before or during analysis");
         return map.computeIfAbsent((CGlobalDataImpl<?>) obj,
                         o -> {
                             CGlobalDataInfo cGlobalDataInfo = new CGlobalDataInfo(data);
@@ -261,7 +260,7 @@ public class CGlobalDataFeature implements InternalFeature {
     }
 
     private void layout() {
-        assert !isLayouted() : "Already layouted";
+        assert !isLaidOut() : "Already laid out";
         final int wordSize = ConfigurationValues.getTarget().wordSize;
         /*
          * Put larger blobs at the end so that offsets are reasonable (<24bit imm) for smaller
@@ -276,11 +275,11 @@ public class CGlobalDataFeature implements InternalFeature {
                             int nextOffset = currentOffset + info.getSize();
                             return (nextOffset + (wordSize - 1)) & ~(wordSize - 1); // align
                         }, Integer::sum);
-        assert isLayouted();
+        assert isLaidOut();
     }
 
     public int getSize() {
-        assert isLayouted() : "Not layouted yet";
+        assert isLaidOut() : "Not laid out yet";
         return totalSize;
     }
 
@@ -289,7 +288,7 @@ public class CGlobalDataFeature implements InternalFeature {
     }
 
     public void writeData(RelocatableBuffer buffer, SymbolConsumer createSymbol, SymbolConsumer createSymbolReference) {
-        assert isLayouted() : "Not layouted yet";
+        assert isLaidOut() : "Not laid out yet";
         ByteBuffer bufferBytes = buffer.getByteBuffer();
         int start = bufferBytes.position();
         assert IntStream.range(start, start + totalSize).allMatch(i -> bufferBytes.get(i) == 0) : "Buffer must be zero-initialized";

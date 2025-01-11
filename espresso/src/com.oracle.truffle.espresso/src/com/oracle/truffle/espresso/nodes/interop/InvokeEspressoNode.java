@@ -23,7 +23,6 @@
 package com.oracle.truffle.espresso.nodes.interop;
 
 import com.oracle.truffle.api.CallTarget;
-import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
 import com.oracle.truffle.api.dsl.Cached;
 import com.oracle.truffle.api.dsl.GenerateUncached;
 import com.oracle.truffle.api.dsl.ReportPolymorphism;
@@ -34,16 +33,19 @@ import com.oracle.truffle.api.nodes.DirectCallNode;
 import com.oracle.truffle.api.nodes.ExplodeLoop;
 import com.oracle.truffle.api.nodes.IndirectCallNode;
 import com.oracle.truffle.api.profiles.BranchProfile;
-import com.oracle.truffle.espresso.impl.Klass;
+import com.oracle.truffle.espresso.EspressoLanguage;
+import com.oracle.truffle.espresso.impl.EspressoType;
 import com.oracle.truffle.espresso.impl.Method;
 import com.oracle.truffle.espresso.meta.EspressoError;
+import com.oracle.truffle.espresso.meta.Meta;
 import com.oracle.truffle.espresso.nodes.EspressoNode;
 import com.oracle.truffle.espresso.nodes.bytecodes.InitCheck;
+import com.oracle.truffle.espresso.runtime.EspressoException;
+import com.oracle.truffle.espresso.runtime.EspressoThreadLocalState;
 import com.oracle.truffle.espresso.runtime.InteropUtils;
 import com.oracle.truffle.espresso.runtime.staticobject.StaticObject;
 
 @GenerateUncached
-@ReportPolymorphism
 public abstract class InvokeEspressoNode extends EspressoNode {
     static final int LIMIT = 4;
 
@@ -55,12 +57,25 @@ public abstract class InvokeEspressoNode extends EspressoNode {
                             method,
                             method.isStatic() ? method.getDeclaringKlass() : ((StaticObject) receiver).getKlass()).getMethodVersion();
         }
-        Object result = executeMethod(resolutionSeed, receiver, arguments, argsConverted);
-        /*
-         * Unwrap foreign objects (invariant: foreign objects are always wrapped when coming in
-         * Espresso and unwrapped when going out)
-         */
-        return InteropUtils.unwrap(getLanguage(), result, getMeta());
+        EspressoLanguage language = getLanguage();
+        Meta meta = getMeta();
+        EspressoThreadLocalState tls = language.getThreadLocalState();
+        tls.blockContinuationSuspension();
+        try {
+            Object result = executeMethod(resolutionSeed, receiver, arguments, argsConverted);
+            /*
+             * Invariant: Foreign objects are always wrapped when coming into Espresso and unwrapped
+             * when going out.
+             */
+            return InteropUtils.unwrap(language, result, meta);
+        } catch (EspressoException e) {
+            /*
+             * Invariant: Foreign exceptions are always unwrapped when going out of Espresso.
+             */
+            throw InteropUtils.unwrapExceptionBoundary(language, e, meta);
+        } finally {
+            tls.unblockContinuationSuspension();
+        }
     }
 
     public final Object execute(Method method, Object receiver, Object[] arguments) throws ArityException, UnsupportedTypeException {
@@ -74,10 +89,10 @@ public abstract class InvokeEspressoNode extends EspressoNode {
     abstract Object executeMethod(Method.MethodVersion method, Object receiver, Object[] arguments, boolean argsConverted) throws ArityException, UnsupportedTypeException;
 
     public static ToEspressoNode[] createToEspresso(Method.MethodVersion methodVersion) {
-        Klass[] parameterKlasses = methodVersion.getMethod().resolveParameterKlasses();
+        EspressoType[] parameterKlasses = methodVersion.getMethod().getGenericParameterTypes();
         ToEspressoNode[] toEspresso = new ToEspressoNode[parameterKlasses.length];
         for (int i = 0; i < parameterKlasses.length; i++) {
-            toEspresso[i] = ToEspressoNode.createToEspresso(parameterKlasses[i], parameterKlasses[i].getMeta());
+            toEspresso[i] = ToEspressoNode.createToEspresso(parameterKlasses[i], methodVersion.getMethod().getMeta());
         }
         return toEspresso;
     }
@@ -134,9 +149,9 @@ public abstract class InvokeEspressoNode extends EspressoNode {
         Object[] convertedArguments = argsConverted ? arguments : new Object[expectedArity];
 
         if (!argsConverted) {
-            Klass[] parameterKlasses = getParameterKlasses(method.getMethod());
+            EspressoType[] parameterTypes = getParameterTypes(method);
             for (int i = 0; i < expectedArity; i++) {
-                convertedArguments[i] = toEspressoNode.execute(arguments[i], parameterKlasses[i]);
+                convertedArguments[i] = toEspressoNode.execute(arguments[i], parameterTypes[i]);
             }
         }
 
@@ -147,15 +162,11 @@ public abstract class InvokeEspressoNode extends EspressoNode {
             return indirectCallNode.call(method.getCallTarget(), argumentsWithReceiver);
         }
 
-        return indirectCallNode.call(method.getMethod().getCallTargetForceInit(), /*
-                                                                                   * static => no
-                                                                                   * receiver
-                                                                                   */ convertedArguments);
+        return indirectCallNode.call(method.getMethod().getCallTargetForceInit(), /*- static => no receiver */ convertedArguments);
     }
 
-    @TruffleBoundary
-    private static Klass[] getParameterKlasses(Method method) {
-        return method.resolveParameterKlasses();
+    public static EspressoType[] getParameterTypes(Method.MethodVersion methodVersion) {
+        return methodVersion.getMethod().getGenericParameterTypes();
     }
 
     private static void checkValidInvoke(Method method, Object receiver) {

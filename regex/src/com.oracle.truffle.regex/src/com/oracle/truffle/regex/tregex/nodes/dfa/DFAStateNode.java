@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -44,11 +44,10 @@ import java.util.Arrays;
 
 import com.oracle.truffle.api.CompilerAsserts;
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
-import com.oracle.truffle.api.nodes.Node;
 import com.oracle.truffle.api.strings.TruffleString;
 import com.oracle.truffle.regex.tregex.nodes.TRegexExecutorLocals;
 import com.oracle.truffle.regex.tregex.nodes.TRegexExecutorNode;
-import com.oracle.truffle.regex.tregex.nodes.input.InputIndexOfNode;
+import com.oracle.truffle.regex.tregex.nodes.input.InputOps;
 import com.oracle.truffle.regex.tregex.string.Encodings;
 import com.oracle.truffle.regex.tregex.util.DebugUtil;
 import com.oracle.truffle.regex.tregex.util.json.Json;
@@ -166,7 +165,7 @@ public class DFAStateNode extends DFAAbstractStateNode {
     }
 
     /**
-     * Returns {@code true} if this state has a {@link InputIndexOfNode}.
+     * Returns {@code true} if this state has a {@code TruffleString.ByteIndexOfCodePointSetNode}.
      */
     boolean canDoIndexOf(TruffleString.CodeRange codeRange) {
         CompilerAsserts.partialEvaluationConstant(codeRange);
@@ -184,7 +183,7 @@ public class DFAStateNode extends DFAAbstractStateNode {
 
     /**
      * Gets called after every call to
-     * {@link InputIndexOfNode#execute(Node, TruffleString, int, int, TruffleString.CodePointSet, Encodings.Encoding)},
+     * {@link InputOps#indexOf(TruffleString, int, int, TruffleString.CodePointSet, Encodings.Encoding, TruffleString.ByteIndexOfCodePointSetNode)}
      * which we call an {@code indexOf}-operation.
      *
      * @param preLoopIndex the starting index of the {@code indexOf}-operation.
@@ -209,9 +208,12 @@ public class DFAStateNode extends DFAAbstractStateNode {
      */
     private void checkFinalState(TRegexDFAExecutorLocals locals, TRegexDFAExecutorNode executor) {
         CompilerAsserts.partialEvaluationConstant(this);
+        CompilerAsserts.partialEvaluationConstant(simpleCG);
         if (isFinalState()) {
-            storeResult(locals, executor, false);
-            if (simpleCG != null) {
+            if (simpleCG == null) {
+                storeResult(locals, executor, false);
+            } else if (!(isAnchoredFinalState() && executor.inputAtEnd(locals))) {
+                storeResult(locals, executor, false);
                 applySimpleCGFinalTransition(simpleCG.getTransitionToFinalState(), executor, locals);
             }
         }
@@ -261,11 +263,12 @@ public class DFAStateNode extends DFAAbstractStateNode {
     }
 
     void applySimpleCGTransition(DFASimpleCGTransition transition, TRegexDFAExecutorNode executor, TRegexDFAExecutorLocals locals) {
-        transition.apply(locals.getCGData().results, locals.getIndex(), executor.getProperties().tracksLastGroup());
+        int index = executor.isForward() ? locals.getIndex() : locals.getNextIndex();
+        transition.apply(locals.getCGData().results, index, executor.getProperties().tracksLastGroup(), executor.isForward());
     }
 
     void applySimpleCGFinalTransition(DFASimpleCGTransition transition, TRegexDFAExecutorNode executor, TRegexDFAExecutorLocals locals) {
-        transition.applyFinal(locals.getCGData(), locals.getIndex(), executor.getProperties().isSimpleCGMustCopy(), executor.getProperties().tracksLastGroup());
+        transition.applyFinal(locals.getCGData(), locals.getIndex(), executor.getProperties().isSimpleCGMustCopy(), executor.getProperties().tracksLastGroup(), executor.isForward());
     }
 
     @TruffleBoundary

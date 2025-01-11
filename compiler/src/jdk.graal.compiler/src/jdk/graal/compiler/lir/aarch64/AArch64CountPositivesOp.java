@@ -69,9 +69,9 @@ import jdk.vm.ci.meta.Value;
  * Returns the number of positive bytes.
  */
 // @formatter:off
-@SyncPort(from = "https://github.com/openjdk/jdk/blob/0a3a925ad88921d387aa851157f54ac0054d347b/src/hotspot/cpu/aarch64/macroAssembler_aarch64.cpp#L5045-L5114",
+@SyncPort(from = "https://github.com/openjdk/jdk/blob/22845a77a2175202876d0029f75fa32271e07b91/src/hotspot/cpu/aarch64/macroAssembler_aarch64.cpp#L5750-L5819",
           sha1 = "ce54a7cf2fcfe7ccb8f6604c038887fc1c4ebce1")
-@SyncPort(from = "https://github.com/openjdk/jdk/blob/0a3a925ad88921d387aa851157f54ac0054d347b/src/hotspot/cpu/aarch64/stubGenerator_aarch64.cpp#L4955-L5121",
+@SyncPort(from = "https://github.com/openjdk/jdk/blob/1d117f65f06456ae571aecc146542c2f79d402cf/src/hotspot/cpu/aarch64/stubGenerator_aarch64.cpp#L4992-L5158",
           sha1 = "3b4e6edb4372e8babb009763c2d05961348dd723")
 // @formatter:on
 @Opcode("AARCH64_COUNT_POSITIVES")
@@ -323,9 +323,8 @@ public final class AArch64CountPositivesOp extends AArch64ComplexVectorOp {
         // right-shift by 7 to get only the sign bits
         masm.neon.ushrVVI(FullReg, ElementSize.Byte, vtmp0, vtmp0, 7);
         // check if result is zero
-        masm.fcmpZero(64, vtmp0);
+        cbnzVector(masm, ElementSize.Byte, vtmp0, vtmp0, tmp5, false, labelRetAdjustLong);
 
-        masm.branchConditionally(ConditionFlag.NE, labelRetAdjustLong);
         masm.compare(32, len, LARGE_LOOP_SIZE);
         masm.branchConditionally(ConditionFlag.GE, labelLargeLoop);
 

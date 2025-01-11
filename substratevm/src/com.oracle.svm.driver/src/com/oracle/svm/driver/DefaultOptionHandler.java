@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016, 2017, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2016, 2023, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -46,8 +46,6 @@ class DefaultOptionHandler extends NativeImage.OptionHandler<NativeImage> {
 
     /* Defunct legacy options that we have to accept to maintain backward compatibility */
     private static final String noServerOption = "--no-server";
-
-    private static final String nativeAccessOption = "--enable-native-access";
 
     DefaultOptionHandler(NativeImage nativeImage) {
         super(nativeImage);
@@ -129,15 +127,6 @@ class DefaultOptionHandler extends NativeImage.OptionHandler<NativeImage> {
             case "--enable-preview":
                 args.poll();
                 nativeImage.addCustomJavaArgs("--enable-preview");
-                nativeImage.enablePreview();
-                return true;
-            case nativeAccessOption:
-                args.poll();
-                String modules = args.poll();
-                if (modules == null) {
-                    NativeImage.showError(nativeAccessOption + moduleSetModifierOptionErrorMessage);
-                }
-                nativeImage.addCustomJavaArgs(nativeAccessOption + "=" + modules + ",org.graalvm.nativeimage.foreign");
                 return true;
         }
 
@@ -212,15 +201,6 @@ class DefaultOptionHandler extends NativeImage.OptionHandler<NativeImage> {
             nativeImage.addLimitedModules(limitModulesArgs);
             return true;
         }
-        if (headArg.startsWith(nativeAccessOption + "=")) {
-            args.poll();
-            String nativeAccessModules = headArg.substring(nativeAccessOption.length() + 1);
-            if (nativeAccessModules.isEmpty()) {
-                NativeImage.showError(headArg + moduleSetModifierOptionErrorMessage);
-            }
-            nativeImage.addCustomJavaArgs(headArg + ",org.graalvm.nativeimage.foreign");
-            return true;
-        }
         return false;
     }
 
@@ -252,7 +232,7 @@ class DefaultOptionHandler extends NativeImage.OptionHandler<NativeImage> {
         }
         if (!jarFileNameBase.isEmpty()) {
             String origin = "manifest from " + jarFilePath.toUri();
-            nativeImage.addPlainImageBuilderArg(nativeImage.oHName + jarFileNameBase, origin);
+            nativeImage.addPlainImageBuilderArg(nativeImage.oHName + jarFileNameBase, origin, false);
         }
         Path finalFilePath = nativeImage.useBundle() ? nativeImage.bundleSupport.substituteClassPath(jarFilePath) : jarFilePath;
         if (!NativeImage.processJarManifestMainAttributes(finalFilePath, nativeImage::handleManifestFileAttributes)) {

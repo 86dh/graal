@@ -30,15 +30,16 @@ import java.util.Map;
 import com.oracle.truffle.api.CompilerAsserts;
 import com.oracle.truffle.api.CompilerDirectives;
 import com.oracle.truffle.api.CompilerDirectives.CompilationFinal;
-import com.oracle.truffle.espresso.classfile.RuntimeConstantPool;
-import com.oracle.truffle.espresso.descriptors.Symbol;
+import com.oracle.truffle.espresso.classfile.ParserField;
+import com.oracle.truffle.espresso.classfile.descriptors.Symbol;
+import com.oracle.truffle.espresso.constantpool.RuntimeConstantPool;
 import com.oracle.truffle.espresso.redefinition.ClassRedefinition;
 
 final class ExtensionFieldsMetadata {
     @CompilationFinal(dimensions = 1) private Field[] addedInstanceFields = Field.EMPTY_ARRAY;
     @CompilationFinal(dimensions = 1) private Field[] addedStaticFields = Field.EMPTY_ARRAY;
 
-    void addNewStaticFields(ObjectKlass.KlassVersion holder, List<ParserField> newFields, RuntimeConstantPool pool, Map<ParserField, Field> compatibleFields,
+    synchronized void addNewStaticFields(ObjectKlass.KlassVersion holder, List<ParserField> newFields, RuntimeConstantPool pool, Map<ParserField, Field> compatibleFields,
                     ClassRedefinition classRedefinition) {
         CompilerAsserts.neverPartOfCompilation();
 
@@ -53,7 +54,7 @@ final class ExtensionFieldsMetadata {
         }
     }
 
-    void addNewInstanceFields(ObjectKlass.KlassVersion holder, List<ParserField> newFields, RuntimeConstantPool pool, Map<ParserField, Field> compatibleFields,
+    synchronized void addNewInstanceFields(ObjectKlass.KlassVersion holder, List<ParserField> newFields, RuntimeConstantPool pool, Map<ParserField, Field> compatibleFields,
                     ClassRedefinition classRedefinition) {
         CompilerAsserts.neverPartOfCompilation();
 
@@ -68,7 +69,7 @@ final class ExtensionFieldsMetadata {
         }
     }
 
-    void addNewInstanceField(Field toAdd) {
+    synchronized void addNewInstanceField(Field toAdd) {
         int nextIndex = addedInstanceFields.length;
         addedInstanceFields = Arrays.copyOf(addedInstanceFields, addedInstanceFields.length + 1);
         addedInstanceFields[nextIndex] = toAdd;
@@ -107,7 +108,7 @@ final class ExtensionFieldsMetadata {
         return toAdd;
     }
 
-    Field[] getDeclaredAddedFields() {
+    synchronized Field[] getDeclaredAddedFields() {
         int instanceFieldslength = addedInstanceFields.length;
         int staticFieldsLength = addedStaticFields.length;
         Field[] result = new Field[instanceFieldslength + staticFieldsLength];
@@ -116,15 +117,15 @@ final class ExtensionFieldsMetadata {
         return result;
     }
 
-    Field[] getAddedStaticFields() {
-        return addedStaticFields;
+    synchronized Field[] getAddedStaticFields() {
+        return addedStaticFields.clone();
     }
 
-    Field[] getAddedInstanceFields() {
-        return addedInstanceFields;
+    synchronized Field[] getAddedInstanceFields() {
+        return addedInstanceFields.clone();
     }
 
-    Field getStaticFieldAtSlot(int slot) {
+    synchronized Field getStaticFieldAtSlot(int slot) {
         Field field = binarySearch(addedStaticFields, slot);
         if (field != null) {
             return field;
@@ -134,7 +135,7 @@ final class ExtensionFieldsMetadata {
         }
     }
 
-    Field getInstanceFieldAtSlot(int slot) {
+    synchronized Field getInstanceFieldAtSlot(int slot) {
         return binarySearch(addedInstanceFields, slot);
     }
 

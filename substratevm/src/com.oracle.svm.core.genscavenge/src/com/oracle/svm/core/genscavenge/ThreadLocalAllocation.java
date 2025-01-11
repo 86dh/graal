@@ -27,9 +27,6 @@ package com.oracle.svm.core.genscavenge;
 import static com.oracle.svm.core.graal.snippets.SubstrateAllocationSnippets.TLAB_END_IDENTITY;
 import static com.oracle.svm.core.graal.snippets.SubstrateAllocationSnippets.TLAB_TOP_IDENTITY;
 
-import jdk.graal.compiler.api.replacements.Fold;
-import jdk.graal.compiler.replacements.AllocationSnippets.FillContent;
-import jdk.graal.compiler.word.Word;
 import org.graalvm.nativeimage.CurrentIsolate;
 import org.graalvm.nativeimage.IsolateThread;
 import org.graalvm.nativeimage.Platform;
@@ -43,11 +40,10 @@ import org.graalvm.word.LocationIdentity;
 import org.graalvm.word.Pointer;
 import org.graalvm.word.PointerBase;
 import org.graalvm.word.UnsignedWord;
-import org.graalvm.word.WordFactory;
 
 import com.oracle.svm.core.SubstrateGCOptions;
-import com.oracle.svm.core.SubstrateOptions;
 import com.oracle.svm.core.Uninterruptible;
+import com.oracle.svm.core.config.ConfigurationValues;
 import com.oracle.svm.core.genscavenge.AlignedHeapChunk.AlignedHeader;
 import com.oracle.svm.core.genscavenge.UnalignedHeapChunk.UnalignedHeader;
 import com.oracle.svm.core.genscavenge.graal.nodes.FormatArrayNode;
@@ -61,8 +57,10 @@ import com.oracle.svm.core.heap.RestrictHeapAccess;
 import com.oracle.svm.core.heap.StoredContinuation;
 import com.oracle.svm.core.hub.DynamicHub;
 import com.oracle.svm.core.hub.LayoutEncoding;
+import com.oracle.svm.core.jfr.HasJfrSupport;
 import com.oracle.svm.core.jfr.JfrTicks;
-import com.oracle.svm.core.jfr.events.ObjectAllocationInNewTLABEvent;
+import com.oracle.svm.core.jfr.SubstrateJVM;
+import com.oracle.svm.core.jfr.events.JfrAllocationEvents;
 import com.oracle.svm.core.log.Log;
 import com.oracle.svm.core.snippets.KnownIntrinsics;
 import com.oracle.svm.core.snippets.SubstrateForeignCallTarget;
@@ -74,7 +72,12 @@ import com.oracle.svm.core.threadlocal.FastThreadLocal;
 import com.oracle.svm.core.threadlocal.FastThreadLocalBytes;
 import com.oracle.svm.core.threadlocal.FastThreadLocalFactory;
 import com.oracle.svm.core.threadlocal.FastThreadLocalWord;
+import com.oracle.svm.core.util.UnsignedUtils;
 import com.oracle.svm.core.util.VMError;
+
+import jdk.graal.compiler.api.replacements.Fold;
+import jdk.graal.compiler.replacements.AllocationSnippets.FillContent;
+import jdk.graal.compiler.word.Word;
 
 /**
  * Bump-pointer allocation from thread-local top and end Pointers. Many of these methods are called
@@ -218,8 +221,13 @@ public final class ThreadLocalAllocation {
         try {
             DynamicHub hub = ObjectHeaderImpl.getObjectHeaderImpl().dynamicHubFromObjectHeader(objectHeader);
 
-            Object result = slowPathNewInstanceWithoutAllocating(hub);
-            runSlowPathHooks();
+            UnsignedWord size = LayoutEncoding.getPureInstanceAllocationSize(hub.getLayoutEncoding());
+            Object result = allocateInstanceInCurrentTlab(hub, size);
+            if (result == null) {
+                result = slowPathNewInstanceWithoutAllocating(hub, size);
+                runSlowPathHooks();
+                sampleSlowPathAllocation(result, size, Integer.MIN_VALUE);
+            }
             return result;
         } finally {
             StackOverflowCheck.singleton().protectYellowZone();
@@ -227,10 +235,9 @@ public final class ThreadLocalAllocation {
     }
 
     @RestrictHeapAccess(access = RestrictHeapAccess.Access.NO_ALLOCATION, reason = "Must not allocate in the implementation of allocation.")
-    private static Object slowPathNewInstanceWithoutAllocating(DynamicHub hub) {
+    private static Object slowPathNewInstanceWithoutAllocating(DynamicHub hub, UnsignedWord size) {
         DeoptTester.disableDeoptTesting();
         long startTicks = JfrTicks.elapsedTicks();
-        UnsignedWord size = LayoutEncoding.getPureInstanceAllocationSize(hub.getLayoutEncoding());
         try {
             HeapImpl.exitIfAllocationDisallowed("ThreadLocalAllocation.slowPathNewInstanceWithoutAllocating", DynamicHub.toClass(hub).getName());
             GCImpl.getGCImpl().maybeCollectOnAllocation(size);
@@ -238,7 +245,7 @@ public final class ThreadLocalAllocation {
             AlignedHeader newTlab = HeapImpl.getChunkProvider().produceAlignedChunk();
             return allocateInstanceInNewTlab(hub, size, newTlab);
         } finally {
-            ObjectAllocationInNewTLABEvent.emit(startTicks, hub, size, HeapParameters.getAlignedHeapChunkSize());
+            JfrAllocationEvents.emit(startTicks, hub, size, HeapParameters.getAlignedHeapChunkSize());
             DeoptTester.enableDeoptTesting();
         }
     }
@@ -256,6 +263,11 @@ public final class ThreadLocalAllocation {
     @SubstrateForeignCallTarget(stubCallingConvention = false)
     private static Object slowPathNewPodInstance(Word objectHeader, int arrayLength, byte[] referenceMap) {
         return slowPathNewArrayLikeObject(objectHeader, arrayLength, referenceMap);
+    }
+
+    @SubstrateForeignCallTarget(stubCallingConvention = false)
+    private static Object newDynamicHub(int vTableSlots) {
+        return HeapImpl.allocateDynamicHub(vTableSlots);
     }
 
     private static Object slowPathNewArrayLikeObject(Word objectHeader, int length, byte[] podReferenceMap) {
@@ -277,13 +289,16 @@ public final class ThreadLocalAllocation {
              * this object is allocated and survives.
              */
             GCImpl.getPolicy().ensureSizeParametersInitialized();
-            if (size.aboveOrEqual(GCImpl.getPolicy().getMaximumHeapSize())) {
+            if (size.aboveOrEqual(GCImpl.getPolicy().getMaximumHeapSize()) && !GCImpl.shouldIgnoreOutOfMemory()) {
                 OutOfMemoryError outOfMemoryError = new OutOfMemoryError("Array allocation too large.");
                 throw OutOfMemoryUtil.reportOutOfMemoryError(outOfMemoryError);
             }
 
             Object result = slowPathNewArrayLikeObject0(hub, length, size, podReferenceMap);
+
             runSlowPathHooks();
+            sampleSlowPathAllocation(result, size, length);
+
             return result;
         } finally {
             StackOverflowCheck.singleton().protectYellowZone();
@@ -319,9 +334,19 @@ public final class ThreadLocalAllocation {
             }
             return array;
         } finally {
-            ObjectAllocationInNewTLABEvent.emit(startTicks, hub, size, tlabSize);
+            JfrAllocationEvents.emit(startTicks, hub, size, tlabSize);
             DeoptTester.enableDeoptTesting();
         }
+    }
+
+    @Uninterruptible(reason = "Holds uninitialized memory.")
+    private static Object allocateInstanceInCurrentTlab(DynamicHub hub, UnsignedWord size) {
+        if (size.aboveThan(availableTlabMemory(getTlab()))) {
+            return null;
+        }
+        assert size.equal(LayoutEncoding.getPureInstanceAllocationSize(hub.getLayoutEncoding()));
+        Pointer memory = allocateRawMemoryInTlab(size, getTlab());
+        return FormatObjectNode.formatObject(memory, DynamicHub.toClass(hub), false, FillContent.WITH_ZEROES, true);
     }
 
     @Uninterruptible(reason = "Holds uninitialized memory.")
@@ -410,30 +435,30 @@ public final class ThreadLocalAllocation {
         assert top.belowOrEqual(end);
 
         if (top.isNull() || end.isNull()) {
-            return WordFactory.unsigned(0);
+            return Word.unsigned(0);
         }
         return end.subtract(top);
     }
 
     @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     private static void guaranteeZeroed(Pointer memory, UnsignedWord size) {
+        int wordSize = ConfigurationValues.getTarget().wordSize;
+        VMError.guarantee(UnsignedUtils.isAMultiple(size, Word.unsigned(wordSize)));
+
         Pointer pos = memory;
         Pointer end = memory.add(size);
         while (pos.belowThan(end)) {
-            VMError.guarantee(pos.readByte(0) == 0);
-            pos = pos.add(1);
+            Word v = pos.readWord(0);
+            VMError.guarantee(v.equal(0));
+            pos = pos.add(wordSize);
         }
     }
 
     static void disableAndFlushForAllThreads() {
         VMOperation.guaranteeInProgress("ThreadLocalAllocation.disableAndFlushForAllThreads");
 
-        if (SubstrateOptions.MultiThreaded.getValue()) {
-            for (IsolateThread vmThread = VMThreads.firstThread(); vmThread.isNonNull(); vmThread = VMThreads.nextThread(vmThread)) {
-                disableAndFlushForThread(vmThread);
-            }
-        } else {
-            disableAndFlushForThread(WordFactory.nullPointer());
+        for (IsolateThread vmThread = VMThreads.firstThread(); vmThread.isNonNull(); vmThread = VMThreads.nextThread(vmThread)) {
+            disableAndFlushForThread(vmThread);
         }
     }
 
@@ -444,12 +469,9 @@ public final class ThreadLocalAllocation {
 
     @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     static void tearDown() {
-        IsolateThread thread = WordFactory.nullPointer();
-        if (SubstrateOptions.MultiThreaded.getValue()) {
-            // no other thread is alive, so it is always safe to access the first thread
-            thread = VMThreads.firstThreadUnsafe();
-            VMError.guarantee(VMThreads.nextThread(thread).isNull(), "Other isolate threads are still active");
-        }
+        // no other thread is alive, so it is always safe to access the first thread
+        IsolateThread thread = VMThreads.firstThreadUnsafe();
+        VMError.guarantee(VMThreads.nextThread(thread).isNull(), "Other isolate threads are still active");
         freeHeapChunks(getTlab(thread));
     }
 
@@ -471,20 +493,20 @@ public final class ThreadLocalAllocation {
         Descriptor tlab = retireCurrentAllocationChunk(thread);
         AlignedHeader alignedChunk = tlab.getAlignedChunk();
         UnalignedHeader unalignedChunk = tlab.getUnalignedChunk();
-        tlab.setAlignedChunk(WordFactory.nullPointer());
-        tlab.setUnalignedChunk(WordFactory.nullPointer());
+        tlab.setAlignedChunk(Word.nullPointer());
+        tlab.setUnalignedChunk(Word.nullPointer());
 
         Space eden = HeapImpl.getHeapImpl().getYoungGeneration().getEden();
         while (alignedChunk.isNonNull()) {
             AlignedHeader next = HeapChunk.getNext(alignedChunk);
-            HeapChunk.setNext(alignedChunk, WordFactory.nullPointer());
+            HeapChunk.setNext(alignedChunk, Word.nullPointer());
             eden.appendAlignedHeapChunk(alignedChunk);
             alignedChunk = next;
         }
 
         while (unalignedChunk.isNonNull()) {
             UnalignedHeader next = HeapChunk.getNext(unalignedChunk);
-            HeapChunk.setNext(unalignedChunk, WordFactory.nullPointer());
+            HeapChunk.setNext(unalignedChunk, Word.nullPointer());
             eden.appendUnalignedHeapChunk(unalignedChunk);
             unalignedChunk = next;
         }
@@ -501,7 +523,7 @@ public final class ThreadLocalAllocation {
 
         tlab.setAllocationTop(HeapChunk.getTopPointer(newChunk), TLAB_TOP_IDENTITY);
         tlab.setAllocationEnd(HeapChunk.getEndPointer(newChunk), TLAB_END_IDENTITY);
-        HeapChunk.setTopPointer(newChunk, WordFactory.nullPointer());
+        HeapChunk.setTopPointer(newChunk, Word.nullPointer());
     }
 
     @Uninterruptible(reason = "Modifies and returns TLAB", callerMustBe = true)
@@ -520,12 +542,18 @@ public final class ThreadLocalAllocation {
              * and only set in the top aligned chunk when it is retired.
              */
             HeapChunk.setTopPointer(alignedChunk, allocationTop);
-            tlab.setAllocationTop(WordFactory.nullPointer(), TLAB_TOP_IDENTITY);
-            tlab.setAllocationEnd(WordFactory.nullPointer(), TLAB_END_IDENTITY);
+            tlab.setAllocationTop(Word.nullPointer(), TLAB_TOP_IDENTITY);
+            tlab.setAllocationEnd(Word.nullPointer(), TLAB_END_IDENTITY);
 
             UnsignedWord usedTlabSize = HeapChunk.getTopPointer(alignedChunk).subtract(AlignedHeapChunk.getObjectsStart(alignedChunk));
             allocatedBytes.set(thread, allocatedBytes.get(thread).add(usedTlabSize));
         }
         return tlab;
+    }
+
+    private static void sampleSlowPathAllocation(Object obj, UnsignedWord allocatedSize, int arrayLength) {
+        if (HasJfrSupport.get()) {
+            SubstrateJVM.getOldObjectProfiler().sample(obj, allocatedSize, arrayLength);
+        }
     }
 }
