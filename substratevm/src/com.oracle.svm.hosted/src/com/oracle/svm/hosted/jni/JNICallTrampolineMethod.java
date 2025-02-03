@@ -30,9 +30,9 @@ import java.util.List;
 
 import org.graalvm.nativeimage.ImageSingletons;
 
+import com.oracle.graal.pointsto.meta.AnalysisMethod;
 import com.oracle.graal.pointsto.meta.AnalysisUniverse;
 import com.oracle.graal.pointsto.meta.HostedProviders;
-import com.oracle.svm.core.SubstrateOptions;
 import com.oracle.svm.core.graal.code.SubstrateBackend;
 import com.oracle.svm.core.graal.code.SubstrateCallingConventionKind;
 import com.oracle.svm.core.graal.nodes.LoweredDeadEndNode;
@@ -48,7 +48,7 @@ import com.oracle.svm.hosted.meta.HostedField;
 import com.oracle.svm.hosted.meta.HostedMetaAccess;
 import com.oracle.svm.hosted.meta.HostedUniverse;
 import com.oracle.svm.hosted.phases.HostedGraphKit;
-import com.oracle.svm.hosted.thread.VMThreadMTFeature;
+import com.oracle.svm.hosted.thread.VMThreadFeature;
 
 import jdk.graal.compiler.debug.DebugContext;
 import jdk.graal.compiler.nodes.StructuredGraph;
@@ -90,7 +90,7 @@ public class JNICallTrampolineMethod extends CustomSubstitutionMethod {
     }
 
     @Override
-    public StructuredGraph buildGraph(DebugContext debug, ResolvedJavaMethod method, HostedProviders providers, Purpose purpose) {
+    public StructuredGraph buildGraph(DebugContext debug, AnalysisMethod method, HostedProviders providers, Purpose purpose) {
         HostedGraphKit kit = new JNIGraphKit(debug, providers, method);
         kit.append(new LoweredDeadEndNode());
 
@@ -119,16 +119,8 @@ public class JNICallTrampolineMethod extends CustomSubstitutionMethod {
             ResolvedJavaType returnType = providers.getWordTypes().getWordImplType();
             CallingConvention callingConvention = backend.getCodeCache().getRegisterConfig().getCallingConvention(
                             SubstrateCallingConventionKind.Native.toType(true), returnType, parameters.toArray(new JavaType[0]), backend);
-            RegisterValue threadArg = null;
-            int threadIsolateOffset = -1;
-            if (SubstrateOptions.SpawnIsolates.getValue()) {
-                threadArg = (RegisterValue) callingConvention.getArgument(0); // JNIEnv
-                if (SubstrateOptions.MultiThreaded.getValue()) {
-                    threadIsolateOffset = ImageSingletons.lookup(VMThreadMTFeature.class).offsetOf(VMThreads.IsolateTL);
-                }
-                // NOTE: GR-17030: JNI is currently broken in the single-threaded, multi-isolate
-                // case. Fixing this also requires changes to how trampolines are generated.
-            }
+            RegisterValue threadArg = (RegisterValue) callingConvention.getArgument(0); // JNIEnv
+            int threadIsolateOffset = ImageSingletons.lookup(VMThreadFeature.class).offsetOf(VMThreads.IsolateTL);
             RegisterValue methodIdArg = (RegisterValue) callingConvention.getArgument(parameters.size() - 1);
 
             return backend.createJNITrampolineMethod(method, identifier, threadArg, threadIsolateOffset, methodIdArg, getFieldOffset(providers));

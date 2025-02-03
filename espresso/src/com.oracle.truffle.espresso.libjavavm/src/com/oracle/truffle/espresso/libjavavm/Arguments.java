@@ -26,8 +26,11 @@ import static com.oracle.truffle.espresso.libjavavm.jniapi.JNIErrors.JNI_ERR;
 
 import java.io.File;
 import java.io.PrintStream;
+import java.io.Serial;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.BitSet;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -46,12 +49,13 @@ import com.oracle.truffle.espresso.libjavavm.jniapi.JNIJavaVMOption;
 
 public final class Arguments {
     private static final PrintStream STDERR = System.err;
+    private static final PrintStream STDOUT = System.out;
 
     public static final String JAVA_PROPS = "java.Properties.";
 
     private static final String AGENT_LIB = "java.AgentLib.";
     private static final String AGENT_PATH = "java.AgentPath.";
-    private static final String JAVA_AGENT = "java.JavaAgent";
+    public static final String JAVA_AGENT = "java.JavaAgent";
 
     /*
      * HotSpot comment:
@@ -70,12 +74,15 @@ public final class Arguments {
     private static final Set<String> IGNORED_XX_OPTIONS = Set.of(
                     "ReservedCodeCacheSize",
                     // `TieredStopAtLevel=0` is handled separately, other values are ignored
-                    "TieredStopAtLevel");
+                    "TieredStopAtLevel",
+                    "MaxMetaspaceSize",
+                    "HeapDumpOnOutOfMemoryError",
+                    "UseJVMCICompiler");
 
     private static final Map<String, String> MAPPED_XX_OPTIONS = Map.of(
                     "TieredCompilation", "engine.MultiTier");
 
-    public static int setupContext(Context.Builder builder, JNIJavaVMInitArgs args) {
+    public static int setupContext(Context.Builder builder, JNIJavaVMInitArgs args, BitSet ignoredArgs) {
         Pointer p = (Pointer) args.getOptions();
         int count = args.getNOptions();
         String classpath = null;
@@ -85,7 +92,9 @@ public final class Arguments {
         ArgumentsHandler handler = new ArgumentsHandler(builder, IGNORED_XX_OPTIONS, MAPPED_XX_OPTIONS, args);
         List<String> jvmArgs = new ArrayList<>();
 
-        boolean ignoreUnrecognized = false;
+        boolean ignoreUnrecognized = args.getIgnoreUnrecognized();
+        boolean printFlagsFinal = false;
+        List<String> xOptions = new ArrayList<>();
 
         for (int i = 0; i < count; i++) {
             JNIJavaVMOption option = (JNIJavaVMOption) p.add(i * SizeOf.get(JNIJavaVMOption.class));
@@ -94,6 +103,10 @@ public final class Arguments {
                 if (str.isNonNull()) {
                     String optionString = CTypeConversion.toJavaString(option.getOptionString());
                     buildJvmArg(jvmArgs, optionString);
+                    if (ignoredArgs.get(i)) {
+                        // this argument participates in jvmArgs but should otherwise be ignored
+                        continue;
+                    }
                     if (optionString.startsWith("-Xbootclasspath:")) {
                         bootClasspathPrepend = null;
                         bootClasspathAppend = null;
@@ -113,7 +126,7 @@ public final class Arguments {
                         builder.option("java.JDWPOptions", value);
                     } else if (optionString.startsWith("-javaagent:")) {
                         String value = optionString.substring("-javaagent:".length());
-                        builder.option(JAVA_AGENT, value);
+                        handler.addJavaAgent(value);
                         handler.addModules("java.instrument");
                     } else if (optionString.startsWith("-agentlib:")) {
                         String[] split = splitEquals(optionString.substring("-agentlib:".length()));
@@ -123,7 +136,7 @@ public final class Arguments {
                         builder.option(AGENT_PATH + split[0], split[1]);
                     } else if (optionString.startsWith("-D")) {
                         String key = optionString.substring("-D".length());
-                        int splitAt = key.indexOf("=");
+                        int splitAt = key.indexOf('=');
                         String value = "";
                         if (splitAt >= 0) {
                             value = key.substring(splitAt + 1);
@@ -154,9 +167,9 @@ public final class Arguments {
                                 break;
                         }
                         builder.option(JAVA_PROPS + key, value);
-                    } else if (optionString.equals("-ea") || optionString.equals("-enableassertions")) {
+                    } else if ("-ea".equals(optionString) || "-enableassertions".equals(optionString)) {
                         builder.option("java.EnableAssertions", "true");
-                    } else if (optionString.equals("-esa") || optionString.equals("-enablesystemassertions")) {
+                    } else if ("-esa".equals(optionString) || "-enablesystemassertions".equals(optionString)) {
                         builder.option("java.EnableSystemAssertions", "true");
                     } else if (optionString.startsWith("--add-reads=")) {
                         handler.addReads(optionString.substring("--add-reads=".length()));
@@ -169,26 +182,30 @@ public final class Arguments {
                     } else if (optionString.startsWith("--enable-native-access=")) {
                         handler.enableNativeAccess(optionString.substring("--enable-native-access=".length()));
                     } else if (optionString.startsWith("--module-path=")) {
-                        builder.option(JAVA_PROPS + "jdk.module.path", optionString.substring("--module-path=".length()));
+                        builder.option("java.ModulePath", optionString.substring("--module-path=".length()));
                     } else if (optionString.startsWith("--upgrade-module-path=")) {
                         builder.option(JAVA_PROPS + "jdk.module.upgrade.path", optionString.substring("--upgrade-module-path=".length()));
                     } else if (optionString.startsWith("--limit-modules=")) {
                         builder.option(JAVA_PROPS + "jdk.module.limitmods", optionString.substring("--limit-modules=".length()));
-                    } else if (optionString.equals("--enable-preview")) {
+                    } else if ("--enable-preview".equals(optionString)) {
                         builder.option("java.EnablePreview", "true");
                     } else if (isXOption(optionString)) {
-                        RuntimeOptions.set(optionString.substring("-X".length()), null);
-                    } else if (optionString.equals("-XX:+IgnoreUnrecognizedVMOptions")) {
+                        xOptions.add(optionString);
+                    } else if ("-XX:+IgnoreUnrecognizedVMOptions".equals(optionString)) {
                         ignoreUnrecognized = true;
-                    } else if (optionString.equals("-XX:-IgnoreUnrecognizedVMOptions")) {
+                    } else if ("-XX:-IgnoreUnrecognizedVMOptions".equals(optionString)) {
                         ignoreUnrecognized = false;
-                    } else if (optionString.equals("-XX:+UnlockExperimentalVMOptions") ||
-                                    optionString.equals("-XX:+UnlockDiagnosticVMOptions")) {
+                    } else if ("-XX:+UnlockExperimentalVMOptions".equals(optionString) ||
+                                    "-XX:+UnlockDiagnosticVMOptions".equals(optionString)) {
                         // approximate UnlockDiagnosticVMOptions as UnlockExperimentalVMOptions
                         handler.setExperimental(true);
-                    } else if (optionString.equals("-XX:-UnlockExperimentalVMOptions") ||
-                                    optionString.equals("-XX:-UnlockDiagnosticVMOptions")) {
+                    } else if ("-XX:-UnlockExperimentalVMOptions".equals(optionString) ||
+                                    "-XX:-UnlockDiagnosticVMOptions".equals(optionString)) {
                         handler.setExperimental(false);
+                    } else if ("-XX:+PrintFlagsFinal".equals(optionString)) {
+                        printFlagsFinal = true;
+                    } else if ("-XX:-PrintFlagsFinal".equals(optionString)) {
+                        printFlagsFinal = false;
                     } else if (optionString.startsWith("--vm.")) {
                         handler.handleVMOption(optionString);
                     } else if (optionString.startsWith("-Xcomp")) {
@@ -196,19 +213,21 @@ public final class Arguments {
                     } else if (optionString.startsWith("-Xbatch")) {
                         builder.option("engine.BackgroundCompilation", "false");
                         builder.option("engine.CompileImmediately", "true");
-                    } else if (optionString.startsWith("-Xint") || optionString.equals("-XX:TieredStopAtLevel=0")) {
+                    } else if (optionString.startsWith("-Xint") || "-XX:TieredStopAtLevel=0".equals(optionString)) {
                         builder.option("engine.Compilation", "false");
+                    } else if ("-Xshare:auto".equals(optionString) || "-Xshare:off".equals(optionString)) {
+                        // ignore
                     } else if (optionString.startsWith("-XX:")) {
                         handler.handleXXArg(optionString);
                     } else if (optionString.startsWith("--help:")) {
                         handler.help(optionString);
                     } else if (isExperimentalFlag(optionString)) {
                         // skip: previously handled
-                    } else if (optionString.equals("--polyglot")) {
+                    } else if ("--polyglot".equals(optionString)) {
                         // skip: handled by mokapot
-                    } else if (optionString.equals("--native")) {
+                    } else if ("--native".equals(optionString)) {
                         // skip: silently succeed.
-                    } else if (optionString.equals("--jvm")) {
+                    } else if ("--jvm".equals(optionString)) {
                         throw abort("Unsupported flag: '--jvm' mode is not supported with this launcher.");
                     } else {
                         handler.parsePolyglotOption(optionString);
@@ -223,6 +242,19 @@ public final class Arguments {
             }
         }
 
+        for (String xOption : xOptions) {
+            RuntimeOptions.set(xOption.substring(2 /* drop the -X */), null);
+        }
+
+        if (printFlagsFinal) {
+            STDOUT.println("[Global flags]");
+            List<RuntimeOptions.Descriptor> descriptors = RuntimeOptions.listDescriptors();
+            descriptors.sort(Comparator.comparing((RuntimeOptions.Descriptor d) -> d.name()));
+            for (RuntimeOptions.Descriptor descriptor : descriptors) {
+                printOption(descriptor);
+            }
+        }
+
         if (bootClasspathPrepend != null) {
             builder.option("java.BootClasspathPrepend", bootClasspathPrepend);
         }
@@ -230,18 +262,9 @@ public final class Arguments {
             builder.option("java.BootClasspathAppend", bootClasspathAppend);
         }
 
-        // classpath provenance order:
-        // (1) the java.class.path property
-        if (classpath == null) {
-            // (2) the environment variable CLASSPATH
-            classpath = System.getenv("CLASSPATH");
-            if (classpath == null) {
-                // (3) the current working directory only
-                classpath = ".";
-            }
+        if (classpath != null) {
+            builder.option("java.Classpath", classpath);
         }
-
-        builder.option("java.Classpath", classpath);
 
         for (int i = 0; i < jvmArgs.size(); i++) {
             builder.option("java.VMArguments." + i, jvmArgs.get(i));
@@ -249,6 +272,26 @@ public final class Arguments {
 
         handler.argumentProcessingDone();
         return JNIErrors.JNI_OK();
+    }
+
+    private static void printOption(RuntimeOptions.Descriptor descriptor) {
+        // see JVMFlag::print_on
+        Class<?> valueType = descriptor.valueType();
+        String typeName;
+        if (valueType == Boolean.class) {
+            typeName = "bool";
+        } else if (valueType == Integer.class) {
+            typeName = "int";
+        } else if (valueType == Long.class) {
+            typeName = "intx";
+        } else if (valueType == Double.class) {
+            typeName = "double";
+        } else if (valueType == String.class) {
+            typeName = "ccstr";
+        } else {
+            typeName = valueType.getSimpleName();
+        }
+        STDOUT.printf("%21s %-39s = %s%n", typeName, descriptor.name(), RuntimeOptions.get(descriptor.name()));
     }
 
     private static void buildJvmArg(List<String> jvmArgs, String optionString) {
@@ -262,11 +305,11 @@ public final class Arguments {
 
     private static boolean isExperimentalFlag(String optionString) {
         // return false for "--experimental-options=[garbage]
-        return optionString.equals("--experimental-options") ||
-                        optionString.equals("--experimental-options=true") ||
-                        optionString.equals("--experimental-options=false") ||
-                        optionString.equals("-XX:+UnlockDiagnosticVMOptions") ||
-                        optionString.equals("-XX:-UnlockDiagnosticVMOptions");
+        return "--experimental-options".equals(optionString) ||
+                        "--experimental-options=true".equals(optionString) ||
+                        "--experimental-options=false".equals(optionString) ||
+                        "-XX:+UnlockDiagnosticVMOptions".equals(optionString) ||
+                        "-XX:-UnlockDiagnosticVMOptions".equals(optionString);
     }
 
     private static boolean isXOption(String optionString) {
@@ -274,16 +317,16 @@ public final class Arguments {
     }
 
     private static String appendPath(String paths, String toAppend) {
-        if (paths != null && paths.length() != 0) {
-            return toAppend != null && toAppend.length() != 0 ? paths + File.pathSeparator + toAppend : paths;
+        if (paths != null && !paths.isEmpty()) {
+            return toAppend != null && !toAppend.isEmpty() ? paths + File.pathSeparator + toAppend : paths;
         } else {
             return toAppend;
         }
     }
 
     private static String prependPath(String toPrepend, String paths) {
-        if (paths != null && paths.length() != 0) {
-            return toPrepend != null && toPrepend.length() != 0 ? toPrepend + File.pathSeparator + paths : paths;
+        if (paths != null && !paths.isEmpty()) {
+            return toPrepend != null && !toPrepend.isEmpty() ? toPrepend + File.pathSeparator + paths : paths;
         } else {
             return toPrepend;
         }
@@ -304,7 +347,7 @@ public final class Arguments {
     }
 
     public static class ArgumentException extends RuntimeException {
-        private static final long serialVersionUID = 5430103471994299046L;
+        @Serial private static final long serialVersionUID = 5430103471994299046L;
 
         private final boolean isExperimental;
 

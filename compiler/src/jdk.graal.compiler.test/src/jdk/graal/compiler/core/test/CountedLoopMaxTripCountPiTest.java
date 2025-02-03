@@ -24,26 +24,17 @@
  */
 package jdk.graal.compiler.core.test;
 
-import jdk.graal.compiler.api.directives.GraalDirectives;
-import jdk.graal.compiler.core.common.GraalOptions;
-import jdk.graal.compiler.core.common.type.StampFactory;
-import jdk.graal.compiler.nodes.BeginNode;
-import jdk.graal.compiler.nodes.NodeView;
-import jdk.graal.compiler.nodes.PiNode;
-import jdk.graal.compiler.nodes.StructuredGraph;
-import jdk.graal.compiler.nodes.ValueNode;
-import jdk.graal.compiler.nodes.graphbuilderconf.GraphBuilderContext;
-import jdk.graal.compiler.nodes.graphbuilderconf.InvocationPlugin;
-import jdk.graal.compiler.nodes.graphbuilderconf.InvocationPlugins;
-import jdk.graal.compiler.nodes.graphbuilderconf.InvocationPlugins.Registration;
-import jdk.graal.compiler.nodes.loop.LoopEx;
-import jdk.graal.compiler.nodes.loop.LoopsData;
-import jdk.graal.compiler.options.OptionValues;
 import org.junit.Assert;
 import org.junit.Test;
 
-import jdk.vm.ci.meta.JavaKind;
-import jdk.vm.ci.meta.ResolvedJavaMethod;
+import jdk.graal.compiler.api.directives.GraalDirectives;
+import jdk.graal.compiler.core.common.GraalOptions;
+import jdk.graal.compiler.nodes.PiNode;
+import jdk.graal.compiler.nodes.StructuredGraph;
+import jdk.graal.compiler.nodes.ValueNode;
+import jdk.graal.compiler.nodes.loop.Loop;
+import jdk.graal.compiler.nodes.loop.LoopsData;
+import jdk.graal.compiler.options.OptionValues;
 
 /**
  * Test to verify that loop max trip count nodes reuse existing {@link PiNode}s if possible.
@@ -54,27 +45,7 @@ public class CountedLoopMaxTripCountPiTest extends GraalCompilerTest {
         if (condition) {
             GraalDirectives.deoptimize();
         }
-        return positivePi(guardedValue);
-    }
-
-    // intrinsified below
-    public static int positivePi(int n) {
-        return n;
-    }
-
-    @Override
-    protected void registerInvocationPlugins(InvocationPlugins invocationPlugins) {
-        super.registerInvocationPlugins(invocationPlugins);
-        Registration r = new Registration(invocationPlugins, CountedLoopMaxTripCountPiTest.class);
-
-        r.register(new InvocationPlugin("positivePi", int.class) {
-            @Override
-            public boolean apply(GraphBuilderContext b, ResolvedJavaMethod method, Receiver receiver, ValueNode n) {
-                BeginNode begin = b.add(new BeginNode());
-                b.addPush(JavaKind.Int, PiNode.create(n, StampFactory.positiveInt().improveWith(n.stamp(NodeView.DEFAULT)), begin));
-                return true;
-            }
-        });
+        return GraalDirectives.positivePi(guardedValue);
     }
 
     int ascendingSnippet(int start, int limit) {
@@ -83,6 +54,7 @@ public class CountedLoopMaxTripCountPiTest extends GraalCompilerTest {
         for (int i = start; GraalDirectives.injectIterationCount(101, i < limit); i++) {
             GraalDirectives.sideEffect(i);
             sum += i;
+            GraalDirectives.neverStripMine();
         }
         return sum + maxTripCount;
     }
@@ -93,6 +65,7 @@ public class CountedLoopMaxTripCountPiTest extends GraalCompilerTest {
         for (int i = start; GraalDirectives.injectIterationCount(102, i >= limit); i--) {
             GraalDirectives.sideEffect(i);
             sum += i;
+            GraalDirectives.neverStripMine();
         }
         return sum + maxTripCount;
     }
@@ -104,10 +77,13 @@ public class CountedLoopMaxTripCountPiTest extends GraalCompilerTest {
      */
     void checkGraph(StructuredGraph graph, LoopsData loops) {
         loops.detectCountedLoops();
-        for (LoopEx loop : loops.loops()) {
+        for (Loop loop : loops.loops()) {
+            if (loop.loopBegin().isStripMinedOuter()) {
+                continue;
+            }
             // max trip count can only be used if a loop does not overflow
-            loop.counted().createOverFlowGuard();
             Assert.assertTrue("expect all loops to be counted", loop.isCounted());
+            loop.counted().createOverFlowGuard();
             ValueNode maxTripCountNode = loop.counted().maxTripCountNode();
             Assert.assertTrue("expect a PiNode for the guarded maxTripCount, got: " + maxTripCountNode, maxTripCountNode instanceof PiNode);
         }

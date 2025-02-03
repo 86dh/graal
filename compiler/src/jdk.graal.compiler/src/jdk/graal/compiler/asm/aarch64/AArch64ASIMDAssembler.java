@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2021, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -24,15 +24,15 @@
  */
 package jdk.graal.compiler.asm.aarch64;
 
-import static jdk.vm.ci.aarch64.AArch64.CPU;
-import static jdk.vm.ci.aarch64.AArch64.SIMD;
-import static jdk.vm.ci.aarch64.AArch64.zr;
 import static jdk.graal.compiler.asm.aarch64.AArch64Assembler.LoadFlag;
 import static jdk.graal.compiler.asm.aarch64.AArch64Assembler.rd;
 import static jdk.graal.compiler.asm.aarch64.AArch64Assembler.rn;
 import static jdk.graal.compiler.asm.aarch64.AArch64Assembler.rs1;
 import static jdk.graal.compiler.asm.aarch64.AArch64Assembler.rs2;
 import static jdk.graal.compiler.asm.aarch64.AArch64Assembler.rs3;
+import static jdk.vm.ci.aarch64.AArch64.CPU;
+import static jdk.vm.ci.aarch64.AArch64.SIMD;
+import static jdk.vm.ci.aarch64.AArch64.zr;
 
 import java.util.Arrays;
 import java.util.HashMap;
@@ -41,7 +41,6 @@ import java.util.Map;
 import jdk.graal.compiler.core.common.NumUtil;
 import jdk.graal.compiler.core.common.Stride;
 import jdk.graal.compiler.debug.GraalError;
-
 import jdk.vm.ci.aarch64.AArch64;
 import jdk.vm.ci.aarch64.AArch64Kind;
 import jdk.vm.ci.code.Register;
@@ -704,7 +703,9 @@ public abstract class AArch64ASIMDAssembler {
         CMHS(UBit | 0b00111 << 11),
         USHL(UBit | 0b01000 << 11),
         UMAX(UBit | 0b01100 << 11),
+        UMAXP(UBit | 0b10100 << 11),
         UMIN(UBit | 0b01101 << 11),
+        UMINP(UBit | 0b10101 << 11),
         SUB(UBit | 0b10000 << 11),
         CMEQ(UBit | 0b10001 << 11),
         MLS(UBit | 0b10010 << 11),
@@ -728,6 +729,7 @@ public abstract class AArch64ASIMDAssembler {
         /* Advanced SIMD shift by immediate (C4-371). */
         SSHR(0b00000 << 11),
         SHL(0b01010 << 11),
+        SHRN(0b10000 << 11),
         SSHLL(0b10100 << 11),
         USHR(UBit | 0b00000 << 11),
         USRA(UBit | 0b00010 << 11),
@@ -1042,10 +1044,10 @@ public abstract class AArch64ASIMDAssembler {
      * C7.2.5 Add pairwise vector.<br>
      * <p>
      * From the manual: "This instruction creates a vector by concatenating the vector elements of
-     * the first source SIMD&FP register after the vector elements of the second source SIMD&FP
-     * register, reads each pair of adjacent vector elements from the concatenated vector, adds each
-     * pair of values together, places the result into a vector, and writes the vector to the
-     * destination SIMD&FP register."
+     * the first source SIMD&amp;FP register after the vector elements of the second source
+     * SIMD&amp;FP register, reads each pair of adjacent vector elements from the concatenated
+     * vector, adds each pair of values together, places the result into a vector, and writes the
+     * vector to the destination SIMD&amp;FP register."
      *
      * @param size register size.
      * @param eSize element size.
@@ -1134,7 +1136,7 @@ public abstract class AArch64ASIMDAssembler {
     /**
      * C7.2.11 Bitwise and vector.<br>
      *
-     * <code>for i in 0..n-1 do dst[i] = src1[i] & src2[i]</code>
+     * <code>for i in 0..n-1 do dst[i] = src1[i] &amp; src2[i]</code>
      *
      * @param size register size.
      * @param dst SIMD register.
@@ -1152,10 +1154,10 @@ public abstract class AArch64ASIMDAssembler {
     /**
      * C7.2.12 Bit Clear and exclusive-OR.<br>
      *
-     * Bit Clear and exclusive-OR performs a bitwise AND of the 128-bit vector in a source SIMD&FP
-     * register and the complement of the vector in another source SIMD&FP register, then performs a
-     * bitwise exclusive-OR of the resulting vector and the vector in a third source SIMD&FP
-     * register, and writes the result to the destination SIMD&FP register.
+     * Bit Clear and exclusive-OR performs a bitwise AND of the 128-bit vector in a source
+     * SIMD&amp;FP register and the complement of the vector in another source SIMD&amp;FP register,
+     * then performs a bitwise exclusive-OR of the resulting vector and the vector in a third source
+     * SIMD&amp;FP register, and writes the result to the destination SIMD&amp;FP register.
      *
      * @param dst SIMD register.
      * @param src1 SIMD register.
@@ -1176,7 +1178,7 @@ public abstract class AArch64ASIMDAssembler {
      * This instruction performs a bitwise and between the SIMD register and the complement of the
      * provided immediate value.
      *
-     * <code>dst = dst & ~(imm{1,2})</code>
+     * <code>dst = dst &amp; ~(imm{1,2})</code>
      *
      * @param size register size.
      * @param dst SIMD register.
@@ -1191,7 +1193,7 @@ public abstract class AArch64ASIMDAssembler {
      * This instruction performs a bitwise and between the first source and the complement of the
      * second source.
      *
-     * <code>for i in 0..n-1 do dst[i] = src1[i] & ~src2[i]</code>
+     * <code>for i in 0..n-1 do dst[i] = src1[i] &amp; ~src2[i]</code>
      *
      * @param size register size.
      * @param dst SIMD register.
@@ -1440,7 +1442,7 @@ public abstract class AArch64ASIMDAssembler {
      * For elements which the comparison is true, all bits of the corresponding dst lane are set to
      * 1. Otherwise, if the comparison is false, then the corresponding dst lane is cleared.
      *
-     * <code>for i in 0..n-1 do dst[i] = src[i] <= 0 ? -1 : 0</code>
+     * <code>for i in 0..n-1 do dst[i] = src[i] &lt;= 0 ? -1 : 0</code>
      *
      * @param size register size.
      * @param eSize element size. ElementSize.DoubleWord is only applicable when size is 128 (i.e.
@@ -1460,7 +1462,7 @@ public abstract class AArch64ASIMDAssembler {
      * For elements which the comparison is true, all bits of the corresponding dst lane are set to
      * 1. Otherwise, if the comparison is false, then the corresponding dst lane is cleared.
      *
-     * <code>for i in 0..n-1 do dst[i] = src[i] < 0 ? -1 : 0</code>
+     * <code>for i in 0..n-1 do dst[i] = src[i] &lt; 0 ? -1 : 0</code>
      *
      * @param size register size.
      * @param eSize element size. ElementSize.DoubleWord is only applicable when size is 128 (i.e.
@@ -1480,7 +1482,7 @@ public abstract class AArch64ASIMDAssembler {
      * For elements which the comparison is true, all bits of the corresponding dst lane are set to
      * 1. Otherwise, if the comparison is false, then the corresponding dst lane is cleared.
      *
-     * <code>for i in 0..n-1 do dst[i] = (src1[i] & src2[i]) == 0 ? 0 : -1</code>
+     * <code>for i in 0..n-1 do dst[i] = (src1[i] &amp; src2[i]) == 0 ? 0 : -1</code>
      *
      * @param size register size.
      * @param eSize element size. ElementSize.DoubleWord is only applicable when size is 128 (i.e.
@@ -1594,7 +1596,7 @@ public abstract class AArch64ASIMDAssembler {
      * <code>for i in 0..127 do dst[i] = src1[i] ^ src2[i] ^ src3[i]</code>
      *
      * Three-way Exclusive-OR performs a three-way exclusive-OR of the values in the three source
-     * SIMD&FP registers, and writes the result to the destination SIMD&FP register.
+     * SIMD&amp;FP registers, and writes the result to the destination SIMD&amp;FP register.
      *
      * @param dst SIMD register.
      * @param src1 SIMD register.
@@ -1614,12 +1616,12 @@ public abstract class AArch64ASIMDAssembler {
      * C7.2.43 Extract from pair of vectors.<br>
      * <p>
      * From the manual: "This instruction extracts the lowest vector elements from the second source
-     * SIMD&FP register and the highest vector elements from the first source SIMD&FP register,
-     * concatenates the results into a vector, and writes the vector to the destination SIMD&FP
-     * register vector. The index value specifies the lowest vector element to extract from the
-     * first source register, and consecutive elements are extracted from the first, then second,
-     * source registers until the destination vector is filled." For this operation, vector elements
-     * are always byte sized.
+     * SIMD&amp;FP register and the highest vector elements from the first source SIMD&amp;FP
+     * register, concatenates the results into a vector, and writes the vector to the destination
+     * SIMD&amp;FP register vector. The index value specifies the lowest vector element to extract
+     * from the first source register, and consecutive elements are extracted from the first, then
+     * second, source registers until the destination vector is filled." For this operation, vector
+     * elements are always byte sized.
      *
      * @param size operation size.
      * @param dst SIMD register.
@@ -1888,7 +1890,7 @@ public abstract class AArch64ASIMDAssembler {
      * For elements which the comparison is true, all bits of the corresponding dst lane are set to
      * 1. Otherwise, if the comparison is false, then the corresponding dst lane is cleared.
      *
-     * <code>for i in 0..n-1 do dst[i] <= src[i] == 0 ? -1 : 0</code>
+     * <code>for i in 0..n-1 do dst[i] &lt;= src[i] == 0 ? -1 : 0</code>
      *
      * @param size register size.
      * @param eSize element size. Must be ElementSize.Word or ElementSize.DoubleWord.
@@ -1910,7 +1912,7 @@ public abstract class AArch64ASIMDAssembler {
      * For elements which the comparison is true, all bits of the corresponding dst lane are set to
      * 1. Otherwise, if the comparison is false, then the corresponding dst lane is cleared.
      *
-     * <code>for i in 0..n-1 do dst[i] < src[i] == 0 ? -1 : 0</code>
+     * <code>for i in 0..n-1 do dst[i] &lt; src[i] == 0 ? -1 : 0</code>
      *
      * @param size register size.
      * @param eSize element size. Must be ElementSize.Word or ElementSize.DoubleWord.
@@ -2608,10 +2610,10 @@ public abstract class AArch64ASIMDAssembler {
     /**
      * C7.2.217 Rotate and Exclusive-OR.<br>
      *
-     * Rotate and Exclusive-OR rotates each 64-bit element of the 128-bit vector in a source SIMD&FP
-     * register left by 1, performs a bitwise exclusive-OR of the resulting 128-bit vector and the
-     * vector in another source SIMD&FP register, and writes the result to the destination SIMD&FP
-     * register.
+     * Rotate and Exclusive-OR rotates each 64-bit element of the 128-bit vector in a source
+     * SIMD&amp;FP register left by 1, performs a bitwise exclusive-OR of the resulting 128-bit
+     * vector and the vector in another source SIMD&amp;FP register, and writes the result to the
+     * destination SIMD&amp;FP register.
      *
      * @param dst SIMD register.
      * @param src1 SIMD register.
@@ -2937,7 +2939,7 @@ public abstract class AArch64ASIMDAssembler {
     /**
      * C7.2.254 shift left (immediate).<br>
      *
-     * <code>for i in 0..n-1 do dst[i] = src[i] << imm</code>
+     * <code>for i in 0..n-1 do dst[i] = src[i] &lt;&lt; imm</code>
      *
      * @param size register size.
      * @param eSize element size. ElementSize.DoubleWord is only applicable when size is 128 (i.e.
@@ -2958,6 +2960,37 @@ public abstract class AArch64ASIMDAssembler {
         int imm7 = eSize.nbits + shiftAmt;
 
         shiftByImmEncoding(ASIMDInstruction.SHL, size, imm7, dst, src);
+    }
+
+    /**
+     * C7.2.258 shift right narrow
+     * <p>
+     * From the manual: "This instruction reads each unsigned integer value from the source
+     * SIMD&amp;FP register, right shifts each result by an immediate value, put the final result
+     * into a vector, and writes the vector to the lower or upper half of the destination
+     * SIMD&amp;FP register. The destination vector elements are half as long as the source vector
+     * elements. The results are truncated..."
+     *
+     * <code>
+     *     for i in 0..(n/2)-1 do dst_bits[i * size, (i+1) * size] = truncate(src_bits[i * 2 * size, (i+1) * 2 * size] >>> shift)
+     *     for i in n/2..n-1 do dst[i] = 0
+     * </code>
+     *
+     * @param dstESize destination element size.
+     * @param dst SIMD register.
+     * @param src SIMD register.
+     * @param shift the shift amount.
+     */
+    public void shrnVV(ElementSize dstESize, Register dst, Register src, int shift) {
+        assert dst.getRegisterCategory().equals(SIMD) : dst;
+        assert src.getRegisterCategory().equals(SIMD) : src;
+        assert dstESize != ElementSize.DoubleWord : "Invalid lane width for shrn";
+        assert shift > 0 && shift <= dstESize.nbits : shift + " " + dstESize;
+
+        // shift = dstESize.nbits * 2 - imm7
+        int imm7 = dstESize.nbits * 2 - shift;
+
+        shiftByImmEncoding(ASIMDInstruction.SHRN, false, imm7, dst, src);
     }
 
     /**
@@ -3098,7 +3131,7 @@ public abstract class AArch64ASIMDAssembler {
      *
      * <code>for i in 0..n-1 do<br>
      * if(byte(src2[i] > 0<br>
-     * dst[i] = (src1[i] << byte(src2[i]<br>
+     * dst[i] = (src1[i] &lt;&lt; byte(src2[i]<br>
      * else<br>
      * dst[i] = (src1[i] >> byte(src2[i])</code>
      *
@@ -3121,10 +3154,12 @@ public abstract class AArch64ASIMDAssembler {
     /**
      * C7.2.316 Signed shift left long (immediate).<br>
      * <p>
-     * From the manual: "This instruction reads each vector element from the source SIMD&FP
+     * From the manual: "This instruction reads each vector element from the source SIMD&amp;FP
      * register, left shifts each vector element by the specified shift amount ... The destination
      * vector elements are twice as long as the source vector elements. All the values in this
      * instruction are signed integer values."
+     *
+     * Extracts vector elements from the lower half of the source register.
      *
      * @param srcESize source element size. Cannot be ElementSize.DoubleWord. The destination
      *            element size will be double this width.
@@ -3144,6 +3179,37 @@ public abstract class AArch64ASIMDAssembler {
         int imm7 = srcESize.nbits + shiftAmt;
 
         shiftByImmEncoding(ASIMDInstruction.SSHLL, false, imm7, dst, src);
+    }
+
+    /**
+     * C7.2.316 Signed shift left long (immediate).<br>
+     *
+     * <p>
+     * From the manual: "This instruction reads each vector element from the source SIMD&amp;FP
+     * register, left shifts each vector element by the specified shift amount ... The destination
+     * vector elements are twice as long as the source vector elements. All the values in this
+     * instruction are signed integer values."
+     *
+     * Extracts vector elements from the upper half of the source register.
+     *
+     * @param srcESize source element size. Cannot be ElementSize.DoubleWord. The destination
+     *            element size will be double this width.
+     * @param dst SIMD register.
+     * @param src SIMD register.
+     * @param shiftAmt shift left amount.
+     */
+    public void sshll2VVI(ElementSize srcESize, Register dst, Register src, int shiftAmt) {
+        assert dst.getRegisterCategory().equals(SIMD) : dst;
+        assert src.getRegisterCategory().equals(SIMD) : src;
+        assert srcESize != ElementSize.DoubleWord : srcESize;
+
+        /* Accepted shift range */
+        assert shiftAmt >= 0 && shiftAmt < srcESize.nbits : shiftAmt + " " + srcESize;
+
+        /* shift = imm7 - srcESize.nbits */
+        int imm7 = srcESize.nbits + shiftAmt;
+
+        shiftByImmEncoding(ASIMDInstruction.SSHLL, true, imm7, dst, src);
     }
 
     /**
@@ -3384,7 +3450,7 @@ public abstract class AArch64ASIMDAssembler {
      * tbl[0..n-1] = table[0..n-1]
      * for i in 0..n-1 {
      *     idx = index[i]
-     *     if (index < n)
+     *     if (index &lt; n)
      *      dst[i] = tbl[idx]
      *     else
      *      dst[i] = 0
@@ -3417,7 +3483,7 @@ public abstract class AArch64ASIMDAssembler {
      * tbl[n..2n-1] = table2[0..n-1]
      * for i in 0..n-1 {
      *     idx = index[i]
-     *     if (index < 2n)
+     *     if (index &lt; 2n)
      *      dst[i] = tbl[idx]
      *     else
      *      dst[i] = 0
@@ -3450,7 +3516,7 @@ public abstract class AArch64ASIMDAssembler {
      * tbl[0..n-1] = table[0..n-1]
      * for i in 0..n-1 {
      *     idx = index[i]
-     *     if (index < n)
+     *     if (index &lt; n)
      *      dst[i] = tbl[idx]
      * }
      * </pre>
@@ -3558,6 +3624,31 @@ public abstract class AArch64ASIMDAssembler {
     }
 
     /**
+     * C7.2.361 Unsigned maximum pairwise.<br>
+     *
+     * <code>
+     *     concat = src2:src1
+     *     for i in 0..n-1 do dst[i] = uint_max(concat[2 * i], concat[2 * i + 1])
+     * </code>
+     *
+     * @param size register size.
+     * @param eSize element size.
+     * @param dst SIMD register.
+     * @param src1 SIMD register.
+     * @param src2 SIMD register.
+     */
+    public void umaxpVVV(ASIMDSize size, ElementSize eSize, Register dst, Register src1, Register src2) {
+        assert usesMultipleLanes(size, eSize) : "Must use multiple lanes " + size + " " + eSize;
+
+        assert dst.getRegisterCategory().equals(SIMD) : dst;
+        assert src1.getRegisterCategory().equals(SIMD) : src1;
+        assert src2.getRegisterCategory().equals(SIMD) : src2;
+        assert eSize != ElementSize.DoubleWord : "Invalid lane width for umaxp";
+
+        threeSameEncoding(ASIMDInstruction.UMAXP, size, elemSizeXX(eSize), dst, src1, src2);
+    }
+
+    /**
      * C7.2.362 Unsigned maximum across vector.<br>
      *
      * <code>dst = uint_max(src[0], ..., src[n]).</code>
@@ -3596,6 +3687,31 @@ public abstract class AArch64ASIMDAssembler {
         assert eSize != ElementSize.DoubleWord : "Invalid lane width for umin";
 
         threeSameEncoding(ASIMDInstruction.UMIN, size, elemSizeXX(eSize), dst, src1, src2);
+    }
+
+    /**
+     * C7.2.364 Unsigned minimum pairwise.<br>
+     *
+     * <code>
+     *     concat = src2:src1
+     *     for i in 0..n-1 do dst[i] = uint_min(concat[2 * i], concat[2 * i + 1])
+     * </code>
+     *
+     * @param size register size.
+     * @param eSize element size.
+     * @param dst SIMD register.
+     * @param src1 SIMD register.
+     * @param src2 SIMD register.
+     */
+    public void uminpVVV(ASIMDSize size, ElementSize eSize, Register dst, Register src1, Register src2) {
+        assert usesMultipleLanes(size, eSize) : "Must use multiple lanes " + size + " " + eSize;
+
+        assert dst.getRegisterCategory().equals(SIMD) : dst;
+        assert src1.getRegisterCategory().equals(SIMD) : src1;
+        assert src2.getRegisterCategory().equals(SIMD) : src2;
+        assert eSize != ElementSize.DoubleWord : "Invalid lane width for uminp";
+
+        threeSameEncoding(ASIMDInstruction.UMINP, size, elemSizeXX(eSize), dst, src1, src2);
     }
 
     /**
@@ -3679,7 +3795,7 @@ public abstract class AArch64ASIMDAssembler {
      *
      * <code>for i in 0..n-1 do<br>
      * if(byte(src2[i] > 0)<br>
-     * dst[i] = (src1[i] << byte(src2[i])<br>
+     * dst[i] = (src1[i] &lt;&lt; byte(src2[i])<br>
      * else<br>
      * dst[i] = (src1[i] >>> byte(src2[i])</code>
      *
@@ -3703,8 +3819,8 @@ public abstract class AArch64ASIMDAssembler {
      * C7.2.391 Unsigned shift left long (immediate).<br>
      * <p>
      * From the manual: "This instruction reads each vector element in the lower half of the source
-     * SIMD&FP register, shifts the unsigned integer value left by the specified number of bits ...
-     * The destination vector elements are twice as long as the source vector elements."
+     * SIMD&amp;FP register, shifts the unsigned integer value left by the specified number of bits
+     * ... The destination vector elements are twice as long as the source vector elements."
      *
      * @param srcESize source element size. Cannot be ElementSize.DoubleWord. The destination
      *            element size will be double this width.
@@ -3730,8 +3846,8 @@ public abstract class AArch64ASIMDAssembler {
      * C7.2.391 Unsigned shift left long (immediate).<br>
      * <p>
      * From the manual: "This instruction reads each vector element in the upper half of the source
-     * SIMD&FP register, shifts the unsigned integer value left by the specified number of bits ...
-     * The destination vector elements are twice as long as the source vector elements."
+     * SIMD&amp;FP register, shifts the unsigned integer value left by the specified number of bits
+     * ... The destination vector elements are twice as long as the source vector elements."
      *
      * @param srcESize source element size. Cannot be ElementSize.DoubleWord. The destination
      *            element size will be twice this width.
@@ -3921,9 +4037,9 @@ public abstract class AArch64ASIMDAssembler {
      * C7.2.401 Exclusive-OR and Rotate.<br>
      *
      * Exclusive-OR and Rotate performs a bitwise exclusive-OR of the 128-bit vectors in the two
-     * source SIMD&FP registers, rotates each 64-bit element of the resulting 128-bit vector right
-     * by the value specified by a 6-bit immediate value, and writes the result to the destination
-     * SIMD&FP register.
+     * source SIMD&amp;FP registers, rotates each 64-bit element of the resulting 128-bit vector
+     * right by the value specified by a 6-bit immediate value, and writes the result to the
+     * destination SIMD&amp;FP register.
      *
      * @param dst SIMD register.
      * @param src1 SIMD register.
@@ -3943,7 +4059,7 @@ public abstract class AArch64ASIMDAssembler {
     /**
      * C7.2.402 Extract narrow.<br>
      * <p>
-     * From the manual: "This instruction reads each vector element from the source SIMD&FP
+     * From the manual: "This instruction reads each vector element from the source SIMD&amp;FP
      * register, narrows each value to half the original width, and writes into the lower half of
      * the destination register..."
      *
@@ -3963,7 +4079,7 @@ public abstract class AArch64ASIMDAssembler {
     /**
      * C7.2.402 Extract narrow.<br>
      * <p>
-     * From the manual: "This instruction reads each vector element from the source SIMD&FP
+     * From the manual: "This instruction reads each vector element from the source SIMD&amp;FP
      * register, narrows each value to half the original width, and writes into the upper half of
      * the destination register..."
      *

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2016, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -148,6 +148,13 @@ final class InstrumentAccessor extends Accessor {
         public OptionDescriptors describeContextOptions(Object instrumentationHandler, Object key, String requiredGroup) {
             InstrumentClientInstrumenter instrumenter = (InstrumentClientInstrumenter) ((InstrumentationHandler) instrumentationHandler).instrumenterMap.get(key);
             OptionDescriptors descriptors = instrumenter.instrument.getContextOptionDescriptors();
+            return validateOptions(requiredGroup, instrumenter, descriptors);
+        }
+
+        @Override
+        public OptionDescriptors describeSourceOptions(Object instrumentationHandler, Object key, String requiredGroup) {
+            InstrumentClientInstrumenter instrumenter = (InstrumentClientInstrumenter) ((InstrumentationHandler) instrumentationHandler).instrumenterMap.get(key);
+            OptionDescriptors descriptors = instrumenter.instrument.getSourceOptionDescriptors();
             return validateOptions(requiredGroup, instrumenter, descriptors);
         }
 

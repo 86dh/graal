@@ -37,6 +37,7 @@ import java.util.function.BooleanSupplier;
 import com.oracle.svm.core.SubstrateUtil;
 import com.oracle.svm.core.annotate.Alias;
 import com.oracle.svm.core.annotate.Inject;
+import com.oracle.svm.core.annotate.InjectAccessors;
 import com.oracle.svm.core.annotate.RecomputeFieldValue;
 import com.oracle.svm.core.annotate.RecomputeFieldValue.Kind;
 import com.oracle.svm.core.annotate.Substitute;
@@ -150,6 +151,46 @@ final class Target_java_util_concurrent_ConcurrentHashMap {
     @Alias @RecomputeFieldValue(kind = RecomputeFieldValue.Kind.Reset)//
     Target_java_util_concurrent_ConcurrentHashMap_EntrySetView entrySet;
 
+    @Alias @InjectAccessors(NCPUAccessor.class) //
+    private static int NCPU;
+}
+
+final class NCPUAccessor {
+    private static int cachedNCPU = -1;
+
+    static int get() {
+        if (cachedNCPU != -1) {
+            return cachedNCPU;
+        }
+        return initializeNCPU();
+    }
+
+    private static synchronized int initializeNCPU() {
+        if (cachedNCPU != -1) {
+            return cachedNCPU;
+        }
+
+        cachedNCPU = Runtime.getRuntime().availableProcessors();
+        return cachedNCPU;
+    }
+
+    static synchronized void set(int value) {
+        cachedNCPU = value;
+    }
+}
+
+@TargetClass(java.util.concurrent.Phaser.class)
+final class Target_java_util_concurrent_Phaser {
+
+    @Alias @InjectAccessors(NCPUAccessor.class) //
+    private static int NCPU;
+}
+
+@TargetClass(className = "java.util.concurrent.atomic.Striped64")
+final class Target_java_util_concurrent_atomic_Striped64 {
+
+    @Alias @InjectAccessors(NCPUAccessor.class) //
+    private static int NCPU;
 }
 
 @TargetClass(value = java.util.concurrent.ConcurrentHashMap.class, innerClass = "KeySetView")
@@ -213,7 +254,7 @@ final class Target_java_util_Currency {
 @TargetClass(className = "java.util.logging.LogManager", onlyWith = JavaLoggingModule.IsPresent.class)
 final class Target_java_util_logging_LogManager {
 
-    @Inject @RecomputeFieldValue(kind = Kind.NewInstance, declClass = AtomicBoolean.class) private AtomicBoolean addedShutdownHook = new AtomicBoolean();
+    @Inject @RecomputeFieldValue(kind = Kind.NewInstance, declClass = AtomicBoolean.class, isFinal = true) private AtomicBoolean addedShutdownHook = new AtomicBoolean();
 
     @Alias static Target_java_util_logging_LogManager manager;
 
@@ -222,22 +263,17 @@ final class Target_java_util_logging_LogManager {
 
     @Substitute
     public static Target_java_util_logging_LogManager getLogManager() {
-        /* First performing logic originally in getLogManager. */
+        /* Logic from original JDK method. */
         if (manager == null) {
-            return manager;
+            return null;
         }
         manager.ensureLogManagerInitialized();
 
-        /* Logic for adding shutdown hook. */
+        /* Add a shutdown hook to close the global handlers. */
         if (!manager.addedShutdownHook.getAndSet(true)) {
-            /* Add a shutdown hook to close the global handlers. */
-            try {
-                Runtime.getRuntime().addShutdownHook(SubstrateUtil.cast(new Target_java_util_logging_LogManager_Cleaner(manager), Thread.class));
-            } catch (IllegalStateException e) {
-                /* If the VM is already shutting down, we do not need to register shutdownHook. */
-            }
+            Runnable hook = SubstrateUtil.cast(new Target_java_util_logging_LogManager_Cleaner(manager), Runnable.class);
+            Util_java_lang_Shutdown.registerLogManagerShutdownHook(hook);
         }
-
         return manager;
     }
 }
@@ -291,6 +327,37 @@ class JavaLoggingModule {
         public boolean getAsBoolean() {
             return isPresent();
         }
+    }
+}
+
+@TargetClass(className = "java.util.concurrent.LinkedTransferQueue", innerClass = "DualNode")
+final class Target_java_util_concurrent_LinkedTransferQueue_DualNode {
+
+    @Alias @InjectAccessors(LinkedTransferQueueDualNodeIsUniprocessorAccessor.class) //
+    private static boolean isUniprocessor;
+}
+
+final class LinkedTransferQueueDualNodeIsUniprocessorAccessor {
+    private static Boolean cachedIsUniprocessor = null;
+
+    static boolean get() {
+        if (cachedIsUniprocessor != null) {
+            return cachedIsUniprocessor;
+        }
+        return initializeIsUniprocessor();
+    }
+
+    static void set(boolean value) {
+        cachedIsUniprocessor = value;
+    }
+
+    private static synchronized boolean initializeIsUniprocessor() {
+        if (cachedIsUniprocessor != null) {
+            return cachedIsUniprocessor;
+        }
+
+        cachedIsUniprocessor = Runtime.getRuntime().availableProcessors() == 1;
+        return cachedIsUniprocessor;
     }
 }
 

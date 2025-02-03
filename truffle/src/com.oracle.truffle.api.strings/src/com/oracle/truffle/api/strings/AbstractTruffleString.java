@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2021, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -50,10 +50,14 @@ import static com.oracle.truffle.api.strings.TStringGuards.isBytes;
 import static com.oracle.truffle.api.strings.TStringGuards.isLatin1;
 import static com.oracle.truffle.api.strings.TStringGuards.isSupportedEncoding;
 import static com.oracle.truffle.api.strings.TStringGuards.isUTF16;
+import static com.oracle.truffle.api.strings.TStringGuards.isUTF16FE;
 import static com.oracle.truffle.api.strings.TStringGuards.isUTF32;
+import static com.oracle.truffle.api.strings.TStringGuards.isUTF32FE;
 import static com.oracle.truffle.api.strings.TStringGuards.isUTF8;
 import static com.oracle.truffle.api.strings.TStringGuards.isValidFixedWidth;
 import static com.oracle.truffle.api.strings.TStringGuards.isValidMultiByte;
+
+import java.lang.ref.Reference;
 
 import com.oracle.truffle.api.CompilerDirectives;
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
@@ -132,7 +136,7 @@ public abstract sealed class AbstractTruffleString permits TruffleString, Mutabl
         assert isByte(stride);
         assert isByte(flags);
         assert validateCodeRange(encoding, codeRange);
-        assert isSupportedEncoding(encoding) || TStringAccessor.ENGINE.requireLanguageWithAllEncodings(encoding);
+        assert isSupportedEncoding(encoding) || isUTF16FE(encoding) || isUTF32FE(encoding) || length == 0 || JCodings.ENABLED;
         this.data = data;
         this.encoding = encoding.id;
         this.offset = offset;
@@ -297,7 +301,6 @@ public abstract sealed class AbstractTruffleString permits TruffleString, Mutabl
 
     final void setData(byte[] array) {
         if (offset() != 0 || length() << stride() != array.length) {
-            CompilerDirectives.transferToInterpreterAndInvalidate();
             throw CompilerDirectives.shouldNotReachHere();
         }
         this.data = array;
@@ -549,9 +552,9 @@ public abstract sealed class AbstractTruffleString permits TruffleString, Mutabl
     }
 
     static void checkByteLength(int byteLength, Encoding encoding) {
-        if (isUTF16(encoding)) {
+        if (isUTF16(encoding) || isUTF16FE(encoding)) {
             TruffleString.checkByteLengthUTF16(byteLength);
-        } else if (isUTF32(encoding)) {
+        } else if (isUTF32(encoding) || isUTF32FE(encoding)) {
             TruffleString.checkByteLengthUTF32(byteLength);
         }
     }
@@ -1461,11 +1464,17 @@ public abstract sealed class AbstractTruffleString permits TruffleString, Mutabl
          * the native pointer's lifetime depends on the pointer object's lifetime.
          */
         private final Object pointerObject;
+        /**
+         * The raw native pointer.
+         * <p>
+         * NOTE: any use of this pointer must be guarded by a reachability fence on
+         * {@link #pointerObject}!
+         */
         final long pointer;
         private byte[] bytes;
         private volatile boolean byteArrayIsValid = false;
 
-        private NativePointer(Object pointerObject, long pointer) {
+        NativePointer(Object pointerObject, long pointer) {
             this.pointerObject = pointerObject;
             this.pointer = pointer;
         }
@@ -1499,8 +1508,12 @@ public abstract sealed class AbstractTruffleString permits TruffleString, Mutabl
                 if (bytes == null) {
                     bytes = new byte[byteLength];
                 }
-                TStringUnsafe.copyFromNative(pointer, byteOffset, bytes, 0, byteLength);
-                byteArrayIsValid = true;
+                try {
+                    TStringUnsafe.copyFromNative(pointer, byteOffset, bytes, 0, byteLength);
+                    byteArrayIsValid = true;
+                } finally {
+                    Reference.reachabilityFence(pointerObject);
+                }
             }
         }
 

@@ -30,7 +30,6 @@ import java.util.Objects;
 import jdk.graal.compiler.debug.GraalError;
 import jdk.graal.compiler.graph.Node;
 import jdk.graal.compiler.graph.NodeClass;
-
 import jdk.vm.ci.meta.Assumptions;
 import jdk.vm.ci.meta.ResolvedJavaMethod;
 
@@ -97,7 +96,30 @@ public class EncodedGraph {
     protected int[] nodeStartOffsets;
 
     public EncodedGraph(byte[] encoding, int startOffset, Object[] objects, NodeClass<?>[] types, StructuredGraph sourceGraph) {
-        this(encoding, startOffset, objects, types, sourceGraph.getAssumptions(), sourceGraph.getMethods(), sourceGraph.hasUnsafeAccess(), sourceGraph.trackNodeSourcePosition());
+        this(encoding,
+                        startOffset,
+                        objects,
+                        types,
+                        sourceGraph.getAssumptions(),
+                        sourceGraph.isRecordingInlinedMethods() ? sourceGraph.getMethods() : null,
+                        sourceGraph.hasUnsafeAccess(),
+                        sourceGraph.trackNodeSourcePosition());
+    }
+
+    public EncodedGraph(EncodedGraph original) {
+        this(original.encoding,
+                        original.startOffset,
+                        original.objects,
+                        original.types,
+                        original.assumptions,
+                        original.inlinedMethods,
+                        original.hasUnsafeAccess,
+                        original.trackNodeSourcePosition);
+        /*
+         * The nodeStartOffsets is only used as a cache for decoding, so it is not copied to ensure
+         * not having inconsistent caching information in the new EncodedGraph.
+         */
+        this.nodeStartOffsets = null;
     }
 
     public EncodedGraph(byte[] encoding, int startOffset, Object[] objects, NodeClass<?>[] types, Assumptions assumptions, List<ResolvedJavaMethod> inlinedMethods,
@@ -132,12 +154,20 @@ public class EncodedGraph {
         return objects[i];
     }
 
+    public void setObject(int i, Object object) {
+        objects[i] = object;
+    }
+
     public NodeClass<?>[] getNodeClasses() {
         return types;
     }
 
     public Assumptions getAssumptions() {
         return assumptions;
+    }
+
+    public boolean isRecordingInlinedMethods() {
+        return inlinedMethods != null;
     }
 
     public List<ResolvedJavaMethod> getInlinedMethods() {

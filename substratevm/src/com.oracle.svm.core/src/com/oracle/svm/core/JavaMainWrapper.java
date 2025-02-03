@@ -55,7 +55,6 @@ import org.graalvm.word.Pointer;
 import org.graalvm.word.PointerBase;
 import org.graalvm.word.UnsignedWord;
 import org.graalvm.word.WordBase;
-import org.graalvm.word.WordFactory;
 
 import com.oracle.svm.core.c.CGlobalData;
 import com.oracle.svm.core.c.CGlobalDataFactory;
@@ -73,9 +72,9 @@ import com.oracle.svm.core.jni.functions.JNIFunctionTables;
 import com.oracle.svm.core.log.Log;
 import com.oracle.svm.core.thread.JavaThreads;
 import com.oracle.svm.core.thread.PlatformThreads;
-import com.oracle.svm.core.thread.ThreadListenerSupport;
+import com.oracle.svm.core.thread.ThreadingSupportImpl;
 import com.oracle.svm.core.thread.VMThreads;
-import com.oracle.svm.core.util.CounterSupport;
+import com.oracle.svm.core.thread.VMThreads.OSThreadHandle;
 import com.oracle.svm.core.util.UserError;
 import com.oracle.svm.core.util.VMError;
 import com.oracle.svm.util.ClassUtil;
@@ -89,11 +88,7 @@ public class JavaMainWrapper {
      */
     public static final CGlobalData<CEntryPointCreateIsolateParameters> MAIN_ISOLATE_PARAMETERS = CGlobalDataFactory.createBytes(() -> SizeOf.get(CEntryPointCreateIsolateParameters.class));
 
-    static {
-        /* WordFactory.boxFactory is initialized by the static initializer of Word. */
-        Word.ensureInitialized();
-    }
-    private static UnsignedWord argvLength = WordFactory.zero();
+    private static UnsignedWord argvLength = Word.zero();
 
     public static class JavaMainSupport {
 
@@ -165,19 +160,27 @@ public class JavaMainWrapper {
     }
 
     public static void invokeMain(String[] args) throws Throwable {
+        String[] mainArgs = args;
+        if (ImageSingletons.contains(PreMainSupport.class)) {
+            PreMainSupport preMainSupport = ImageSingletons.lookup(PreMainSupport.class);
+            mainArgs = preMainSupport.retrievePremainArgs(args);
+            preMainSupport.invokePremain();
+        }
+
         JavaMainSupport javaMainSupport = ImageSingletons.lookup(JavaMainSupport.class);
         if (javaMainSupport.mainNonstatic) {
             Object instance = javaMainSupport.javaMainClassCtorHandle.invoke();
             if (javaMainSupport.mainWithoutArgs) {
                 javaMainSupport.javaMainHandle.invoke(instance);
             } else {
-                javaMainSupport.javaMainHandle.invoke(instance, args);
+                javaMainSupport.javaMainHandle.invoke(instance, mainArgs);
             }
         } else {
             if (javaMainSupport.mainWithoutArgs) {
                 javaMainSupport.javaMainHandle.invokeExact();
             } else {
-                javaMainSupport.javaMainHandle.invokeExact(args);
+                /* We really need to pass a String[] without any casting. */
+                javaMainSupport.javaMainHandle.invokeExact(mainArgs);
             }
         }
     }
@@ -219,8 +222,6 @@ public class JavaMainWrapper {
                 return VMInspectionOptions.dumpImageHeap() ? 0 : 1;
             }
 
-            ThreadListenerSupport.get().beforeThreadRun();
-
             // Ensure that native code using JNI_GetCreatedJavaVMs finds this isolate.
             JNIJavaVMList.addJavaVM(JNIFunctionTables.singleton().getGlobalJavaVM());
 
@@ -247,22 +248,32 @@ public class JavaMainWrapper {
 
     @Uninterruptible(reason = "The caller initialized the thread state, so the callees do not need to be uninterruptible.", calleeMustBe = false)
     private static void runShutdown() {
+        ThreadingSupportImpl.pauseRecurringCallback("Recurring callbacks can't be executed during shutdown.");
         runShutdown0();
     }
 
     private static void runShutdown0() {
-        PlatformThreads.ensureCurrentAssigned("DestroyJavaVM", null, false);
+        try {
+            PlatformThreads.ensureCurrentAssigned("DestroyJavaVM", null, false);
+        } catch (Throwable e) {
+            Log.log().string("PlatformThreads.ensureCurrentAssigned() failed during shutdown: ").exception(e).newline();
+            return;
+        }
 
-        // Shutdown sequence: First wait for all non-daemon threads to exit.
+        /* Wait for all non-daemon threads to exit. */
         PlatformThreads.singleton().joinAllNonDaemons();
 
-        /*
-         * Run shutdown hooks (both our own hooks and application-registered hooks. Note that this
-         * can start new non-daemon threads. We are not responsible to wait until they have exited.
-         */
-        RuntimeSupport.getRuntimeSupport().shutdown();
-
-        CounterSupport.singleton().logValues(Log.log());
+        try {
+            /*
+             * Run shutdown hooks (both our own hooks and application-registered hooks) and teardown
+             * hooks. Note that this can start new non-daemon threads. We are not responsible to
+             * wait until they have exited.
+             */
+            RuntimeSupport.getRuntimeSupport().shutdown();
+            RuntimeSupport.executeTearDownHooks();
+        } catch (Throwable e) {
+            Log.log().string("Exception occurred while executing shutdown hooks: ").exception(e).newline();
+        }
     }
 
     @Uninterruptible(reason = "Thread state not set up yet.")
@@ -281,6 +292,7 @@ public class JavaMainWrapper {
         try {
             CPUFeatureAccess cpuFeatureAccess = ImageSingletons.lookup(CPUFeatureAccess.class);
             cpuFeatureAccess.verifyHostSupportsArchitectureEarlyOrExit();
+
             // Create the isolate and attach the current C thread as the main Java thread.
             EnterCreateIsolateWithCArgumentsPrologue.enter(argc, argv);
             assert !VMThreads.wasStartedByCurrentIsolate(CurrentIsolate.getCurrentThread()) : "re-attach would cause issues otherwise";
@@ -309,7 +321,7 @@ public class JavaMainWrapper {
         MAIN_ISOLATE_PARAMETERS.get().setArgc(argc);
         MAIN_ISOLATE_PARAMETERS.get().setArgv(argv);
         long stackSize = SubstrateOptions.StackSize.getHostedValue();
-        PlatformThreads.OSThreadHandle osThreadHandle = PlatformThreads.singleton().startThreadUnmanaged(RUN_MAIN_ROUTINE.get(), WordFactory.nullPointer(), (int) stackSize);
+        OSThreadHandle osThreadHandle = PlatformThreads.singleton().startThreadUnmanaged(RUN_MAIN_ROUTINE.get(), Word.nullPointer(), (int) stackSize);
         if (osThreadHandle.isNull()) {
             CEntryPointActions.failFatally(1, START_THREAD_UNMANAGED_ERROR_MESSAGE.get());
             return 1;
@@ -329,7 +341,7 @@ public class JavaMainWrapper {
 
     private static final CGlobalData<CFunctionPointer> RUN_MAIN_ROUTINE = CGlobalDataFactory.forSymbol("__svm_JavaMainWrapper_runMainRoutine");
 
-    private static class RunMainInNewThreadBooleanSupplier implements BooleanSupplier {
+    private static final class RunMainInNewThreadBooleanSupplier implements BooleanSupplier {
         @Override
         public boolean getAsBoolean() {
             if (!ImageSingletons.contains(JavaMainSupport.class)) {
@@ -345,7 +357,7 @@ public class JavaMainWrapper {
     @CEntryPointOptions(prologue = CEntryPointOptions.NoPrologue.class, epilogue = CEntryPointOptions.NoEpilogue.class)
     static WordBase runMainRoutine(PointerBase data) {
         int exitStatus = doRun(MAIN_ISOLATE_PARAMETERS.get().getArgc(), MAIN_ISOLATE_PARAMETERS.get().getArgv());
-        return WordFactory.signed(exitStatus);
+        return Word.signed(exitStatus);
     }
 
     private static boolean isArgumentBlockSupported() {
@@ -380,13 +392,13 @@ public class JavaMainWrapper {
 
         CEntryPointCreateIsolateParameters args = MAIN_ISOLATE_PARAMETERS.get();
         CCharPointer firstArgPos = args.getArgv().read(0);
-        if (argvLength.equal(WordFactory.zero())) {
+        if (argvLength.equal(Word.zero())) {
             // Get char* to last program argument
             CCharPointer lastArgPos = args.getArgv().read(args.getArgc() - 1);
             // Determine the length of the last program argument
             UnsignedWord lastArgLength = SubstrateUtil.strlen(lastArgPos);
             // Determine maximum C string length that can be stored in the program argument part
-            argvLength = WordFactory.unsigned(lastArgPos.rawValue()).add(lastArgLength).subtract(WordFactory.unsigned(firstArgPos.rawValue()));
+            argvLength = Word.unsigned(lastArgPos.rawValue()).add(lastArgLength).subtract(Word.unsigned(firstArgPos.rawValue()));
         }
         return Math.toIntExact(argvLength.rawValue());
     }
@@ -401,7 +413,7 @@ public class JavaMainWrapper {
             CCharPointer arg0Pointer = arg0Pin.get();
             UnsignedWord arg0Length = SubstrateUtil.strlen(arg0Pointer);
 
-            UnsignedWord origLength = WordFactory.unsigned(getCRuntimeArgumentBlockLength());
+            UnsignedWord origLength = Word.unsigned(getCRuntimeArgumentBlockLength());
             UnsignedWord newArgLength = origLength;
             if (arg0Length.add(1).belowThan(origLength)) {
                 newArgLength = arg0Length.add(1);
@@ -426,7 +438,7 @@ public class JavaMainWrapper {
         return CTypeConversion.toJavaString(MAIN_ISOLATE_PARAMETERS.get().getArgv().read(0));
     }
 
-    private static class EnterCreateIsolateWithCArgumentsPrologue implements CEntryPointOptions.Prologue {
+    private static final class EnterCreateIsolateWithCArgumentsPrologue implements CEntryPointOptions.Prologue {
         private static final CGlobalData<CCharPointer> errorMessage = CGlobalDataFactory.createCString(
                         "Failed to create the main Isolate.");
 

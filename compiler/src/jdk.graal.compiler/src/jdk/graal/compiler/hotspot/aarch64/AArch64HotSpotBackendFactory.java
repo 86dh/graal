@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, 2024, Oracle and/or its affiliates. All rights reserved.
  * Copyright (c) 2018, Red Hat Inc. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
@@ -58,9 +58,7 @@ import jdk.graal.compiler.phases.common.AddressLoweringByUsePhase;
 import jdk.graal.compiler.phases.tiers.CompilerConfiguration;
 import jdk.graal.compiler.replacements.aarch64.AArch64GraphBuilderPlugins;
 import jdk.graal.compiler.serviceprovider.ServiceProvider;
-
 import jdk.vm.ci.aarch64.AArch64;
-import jdk.vm.ci.code.Architecture;
 import jdk.vm.ci.code.Register;
 import jdk.vm.ci.code.RegisterConfig;
 import jdk.vm.ci.code.TargetDescription;
@@ -80,8 +78,8 @@ public class AArch64HotSpotBackendFactory extends HotSpotBackendFactory {
     }
 
     @Override
-    public Class<? extends Architecture> getArchitecture() {
-        return AArch64.class;
+    public String getArchitecture() {
+        return "aarch64";
     }
 
     @Override
@@ -111,7 +109,6 @@ public class AArch64HotSpotBackendFactory extends HotSpotBackendFactory {
                         barrierSet);
         AArch64GraphBuilderPlugins.register(plugins,
                         replacements,
-                        (AArch64) target.arch,
                         /* registerForeignCallMath */true,
                         options);
         return plugins;

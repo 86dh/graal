@@ -22,8 +22,12 @@
  */
 package com.oracle.truffle.espresso.launcher;
 
+import java.io.BufferedReader;
 import java.io.File;
 import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -40,6 +44,12 @@ import org.graalvm.polyglot.Context.Builder;
 import org.graalvm.polyglot.PolyglotException;
 import org.graalvm.polyglot.Value;
 
+/**
+ * A simple emulation of the {@code java} launcher that parses the command line flags and builds and
+ * Espresso context based on them. This code isn't used by anyone except Espresso developers,
+ * because in a shipped Espresso the VM is started via {@code mokapot} instead (see
+ * {@code hacking.md} for details).
+ */
 public final class EspressoLauncher extends AbstractLanguageLauncher {
     private static final String AGENT_LIB = "java.AgentLib.";
     private static final String AGENT_PATH = "java.AgentPath.";
@@ -132,7 +142,7 @@ public final class EspressoLauncher extends AbstractLanguageLauncher {
 
         /**
          * Advances the position, skipping over the value associated with an option if needed.
-         * 
+         *
          * @return true if there are still arguments to process, false otherwise.
          */
         boolean next() {
@@ -169,8 +179,11 @@ public final class EspressoLauncher extends AbstractLanguageLauncher {
         String jarFileName = null;
         ArrayList<String> unrecognized = new ArrayList<>();
         boolean isRelaxStaticObjectSafetyChecksSet = false;
+        int javaAgentIndex = 0;
 
-        Arguments args = new Arguments(arguments);
+        List<String> expandedArguments = expandAtFiles(arguments);
+
+        Arguments args = new Arguments(expandedArguments);
         while (args.next()) {
             String arg = args.getKey();
             switch (arg) {
@@ -247,6 +260,14 @@ public final class EspressoLauncher extends AbstractLanguageLauncher {
                 case "-Xint":
                     espressoOptions.put("engine.Compilation", "false");
                     break;
+                case "-Xshare:auto":
+                case "-Xshare:off":
+                    // ignore
+                    break;
+                case "-XX:+UseJVMCICompiler":
+                case "-XX:-UseJVMCICompiler":
+                    getError().println("Ignoring " + arg);
+                    break;
 
                 case "-XX:+PauseOnExit":
                     pauseOnExit = true;
@@ -281,7 +302,7 @@ public final class EspressoLauncher extends AbstractLanguageLauncher {
                         espressoOptions.put("java.JDWPOptions", value);
                     } else if (arg.startsWith("-javaagent:")) {
                         String value = arg.substring("-javaagent:".length());
-                        espressoOptions.put(JAVA_AGENT, value);
+                        espressoOptions.put(JAVA_AGENT + "." + javaAgentIndex++, value);
                         mergeOption("java.AddModules", "java.instrument");
                     } else if (arg.startsWith("-agentlib:")) {
                         String[] split = splitEquals(arg.substring("-agentlib:".length()));
@@ -341,7 +362,7 @@ public final class EspressoLauncher extends AbstractLanguageLauncher {
 
                     mainClassName = getMainClassName(jarFileName);
                 }
-                buildJvmArgs(arguments, args.getNumberOfProcessedArgs());
+                buildJvmArgs(expandedArguments, args.getNumberOfProcessedArgs());
                 args.pushLeftoversArgs();
                 break;
             }
@@ -355,14 +376,12 @@ public final class EspressoLauncher extends AbstractLanguageLauncher {
             if (classpath == null) {
                 // (3) the environment variable CLASSPATH
                 classpath = System.getenv("CLASSPATH");
-                if (classpath == null) {
-                    // (4) the current working directory only
-                    classpath = ".";
-                }
             }
         }
 
-        espressoOptions.put("java.Classpath", classpath);
+        if (classpath != null) {
+            espressoOptions.put("java.Classpath", classpath);
+        }
 
         if (!isRelaxStaticObjectSafetyChecksSet) {
             // Since Espresso has a verifier, the Static Object Model does not need to perform shape
@@ -373,6 +392,36 @@ public final class EspressoLauncher extends AbstractLanguageLauncher {
 
         return unrecognized;
     }
+
+    private List<String> expandAtFiles(List<String> arguments) {
+        List<String> expanded = null;
+        for (int i = 0; i < arguments.size(); i++) {
+            String arg = arguments.get(i);
+            if (arg.startsWith("@")) {
+                if (expanded == null) {
+                    expanded = new ArrayList<>(arguments.subList(0, i));
+                }
+                parseArgFile(arg.substring(1, arg.length()), expanded);
+            } else if (expanded != null) {
+                expanded.add(arg);
+            }
+        }
+        return expanded == null ? arguments : expanded;
+    }
+
+    private void parseArgFile(String pathArg, List<String> expanded) {
+        Path argFilePath = Paths.get(pathArg);
+        try {
+            BufferedReader reader = Files.newBufferedReader(argFilePath);
+            new ArgFileParser(reader).parse(expanded::add);
+        } catch (IOException e) {
+            throw abort(new RuntimeException("Cannot open @argfile", e), 1);
+        }
+    }
+
+    private static final Set<String> knownPassThroughOptions = Set.of(
+                    "WhiteBoxAPI",
+                    "EnableJVMCI");
 
     private void handleXXArg(String fullArg, ArrayList<String> unrecognized) {
         String arg = fullArg.substring("-XX:".length());
@@ -390,9 +439,12 @@ public final class EspressoLauncher extends AbstractLanguageLauncher {
             name = arg.substring(0, idx);
             value = arg.substring(idx + 1);
         }
+        if (knownPassThroughOptions.contains(name)) {
+            espressoOptions.put("java." + name, value);
+            return;
+        }
         switch (name) {
             case "UnlockDiagnosticVMOptions", "UnlockExperimentalVMOptions" -> unrecognized.add("--experimental-options=" + value);
-            case "WhiteBoxAPI" -> espressoOptions.put("java." + name, value);
             case "TieredStopAtLevel" -> {
                 if ("0".equals(value)) {
                     espressoOptions.put("engine.Compilation", "false");
@@ -412,7 +464,7 @@ public final class EspressoLauncher extends AbstractLanguageLauncher {
          * world. It is actually expected that the vm arguments list is populated with arguments
          * which have been pre-formatted by the regular Java launcher when passed to the VM, ie: the
          * arguments if the VM was created through a call to JNI_CreateJavaVM.
-         * 
+         *
          * In particular, it expects all kay-value pairs to be equals-separated and not
          * space-separated. Furthermore, it does not expect syntactic-sugared some arguments such as
          * '-m' or '--modules', that would have been replaced by the regular java launcher as

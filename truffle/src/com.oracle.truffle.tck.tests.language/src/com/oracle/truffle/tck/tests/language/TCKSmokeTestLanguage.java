@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2022, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -51,7 +51,12 @@ import com.oracle.truffle.api.nodes.RootNode;
 import com.oracle.truffle.tck.tests.language.TCKSmokeTestLanguage.TCKSmokeTestLanguageContext;
 import sun.misc.Unsafe;
 
+import java.io.IOException;
+import java.io.InputStream;
 import java.lang.reflect.Field;
+import java.net.MalformedURLException;
+import java.net.URI;
+import java.net.URL;
 
 @Registration(id = TCKSmokeTestLanguage.ID, name = TCKSmokeTestLanguage.ID, characterMimeTypes = TCKSmokeTestLanguage.MIME)
 final class TCKSmokeTestLanguage extends TruffleLanguage<TCKSmokeTestLanguageContext> {
@@ -69,8 +74,15 @@ final class TCKSmokeTestLanguage extends TruffleLanguage<TCKSmokeTestLanguageCon
 
     @Override
     protected CallTarget parse(ParsingRequest request) {
-        RootNode root = new RootNodeImpl(this, new PrivilegedCallNode(), new UnsafeCallNode());
-        return root.getCallTarget();
+        try {
+            Thread thread = new Thread(() -> {
+            });
+            URL url = URI.create("http://localhost").toURL();
+            RootNode root = new RootNodeImpl(this, new PrivilegedCallNode(thread, url), new UnsafeCallNode());
+            return root.getCallTarget();
+        } catch (MalformedURLException urlException) {
+            throw new AssertionError(urlException);
+        }
     }
 
     static final class TCKSmokeTestLanguageContext {
@@ -106,10 +118,20 @@ final class TCKSmokeTestLanguage extends TruffleLanguage<TCKSmokeTestLanguageCon
 
     private static final class PrivilegedCallNode extends BaseNode {
 
+        private final Thread otherThread;
+        private final URL url;
+
+        PrivilegedCallNode(Thread thread, URL url) {
+            this.otherThread = thread;
+            this.url = url;
+        }
+
         @Override
         void execute(VirtualFrame frame) {
             doPrivilegedCall();
-            doPrivilegedCallBehindBoundary();
+            doBehindBoundaryPrivilegedCall();
+            doInterrupt();
+            doPolymorphicCall();
         }
 
         @SuppressWarnings("deprecation" /* JEP-411 */)
@@ -118,21 +140,36 @@ final class TCKSmokeTestLanguage extends TruffleLanguage<TCKSmokeTestLanguageCon
         }
 
         @TruffleBoundary
-        static void doPrivilegedCallBehindBoundary() {
+        static void doBehindBoundaryPrivilegedCall() {
             Thread.currentThread().setName("Thread-2");
+        }
+
+        @TruffleBoundary
+        void doInterrupt() {
+            if (this.otherThread != null) {
+                this.otherThread.interrupt();
+            }
+            Thread.currentThread().interrupt();
+        }
+
+        @TruffleBoundary
+        void doPolymorphicCall() {
+            try {
+                InputStream in = url.openStream();
+                in.close();
+            } catch (IOException ioe) {
+                throw new RuntimeException(ioe);
+            }
         }
     }
 
     private static final class UnsafeCallNode extends BaseNode {
         private static final Unsafe UNSAFE;
-        private static final long VALUE_OFFSET;
         static {
             try {
                 Field f = Unsafe.class.getDeclaredField("theUnsafe");
                 f.setAccessible(true);
                 UNSAFE = (Unsafe) f.get(null);
-                f = Integer.class.getDeclaredField("value");
-                VALUE_OFFSET = getFieldOffset(f);
             } catch (ReflectiveOperationException e) {
                 throw new RuntimeException(e);
             }
@@ -146,19 +183,28 @@ final class TCKSmokeTestLanguage extends TruffleLanguage<TCKSmokeTestLanguageCon
         @Override
         void execute(VirtualFrame frame) {
             doUnsafeAccess();
-            doUnsafeAccessBehindBoundary();
+            doBehindBoundaryUnsafeAccess();
+        }
+
+        @TruffleBoundary
+        static long getFieldOffset(Class<?> clazz, String value) {
+            try {
+                return getFieldOffset(clazz.getDeclaredField(value));
+            } catch (ReflectiveOperationException e) {
+                throw new RuntimeException(e);
+            }
         }
 
         static void doUnsafeAccess() {
             int i = 42;
-            int result = UNSAFE.getInt(i, VALUE_OFFSET);
+            int result = UNSAFE.getInt(i, getFieldOffset(Integer.class, "value"));
             assert i == result;
         }
 
         @TruffleBoundary
-        static void doUnsafeAccessBehindBoundary() {
+        static void doBehindBoundaryUnsafeAccess() {
             int i = 23;
-            int result = UNSAFE.getInt(i, VALUE_OFFSET);
+            int result = UNSAFE.getInt(i, getFieldOffset(Integer.class, "value"));
             assert i == result;
         }
     }

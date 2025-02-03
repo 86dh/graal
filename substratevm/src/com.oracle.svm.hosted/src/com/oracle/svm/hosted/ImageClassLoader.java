@@ -37,30 +37,26 @@ import java.util.ArrayList;
 import java.util.Enumeration;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
-import com.oracle.svm.util.LogUtils;
 import org.graalvm.collections.EconomicSet;
-import jdk.graal.compiler.debug.GraalError;
-import jdk.graal.compiler.word.Word;
+import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
 
+import com.oracle.svm.core.BuildPhaseProvider;
 import com.oracle.svm.core.SubstrateOptions;
 import com.oracle.svm.core.TypeResult;
+import com.oracle.svm.core.util.VMError;
+import com.oracle.svm.util.LogUtils;
 import com.oracle.svm.util.ReflectionUtil;
 
-public final class ImageClassLoader {
+import jdk.graal.compiler.debug.GraalError;
 
-    static {
-        /*
-         * ImageClassLoader is one of the first classes used during image generation, so early
-         * enough to ensure that we can use the Word type.
-         */
-        Word.ensureInitialized();
-    }
+public final class ImageClassLoader {
 
     public final Platform platform;
     public final NativeImageClassLoaderSupport classLoaderSupport;
@@ -70,6 +66,8 @@ public final class ImageClassLoader {
     private final EconomicSet<Class<?>> hostedOnlyClasses = EconomicSet.create();
     private final EconomicSet<Method> systemMethods = EconomicSet.create();
     private final EconomicSet<Field> systemFields = EconomicSet.create();
+    /** Modules containing all {@code svm.core} and {@code svm.hosted} classes. */
+    private Set<Module> builderModules;
 
     ImageClassLoader(Platform platform, NativeImageClassLoaderSupport classLoaderSupport) {
         this.platform = platform;
@@ -80,6 +78,7 @@ public final class ImageClassLoader {
         this.watchdog = new DeadlockWatchdog(watchdogInterval, watchdogExitOnTimeout);
     }
 
+    @SuppressWarnings("unused")
     public void loadAllClasses() throws InterruptedException {
         ForkJoinPool executor = ForkJoinPool.commonPool();
         try {
@@ -226,7 +225,7 @@ public final class ImageClassLoader {
     }
 
     public Enumeration<URL> findResourcesByName(String resource) throws IOException {
-        return classLoaderSupport.getClassLoader().getResources(resource);
+        return getClassLoader().getResources(resource);
     }
 
     /**
@@ -264,25 +263,9 @@ public final class ImageClassLoader {
     public TypeResult<Class<?>> findClass(String name, boolean allowPrimitives) {
         try {
             if (allowPrimitives && name.indexOf('.') == -1) {
-                switch (name) {
-                    case "boolean":
-                        return TypeResult.forClass(boolean.class);
-                    case "char":
-                        return TypeResult.forClass(char.class);
-                    case "float":
-                        return TypeResult.forClass(float.class);
-                    case "double":
-                        return TypeResult.forClass(double.class);
-                    case "byte":
-                        return TypeResult.forClass(byte.class);
-                    case "short":
-                        return TypeResult.forClass(short.class);
-                    case "int":
-                        return TypeResult.forClass(int.class);
-                    case "long":
-                        return TypeResult.forClass(long.class);
-                    case "void":
-                        return TypeResult.forClass(void.class);
+                Class<?> primitive = forPrimitive(name);
+                if (primitive != null) {
+                    return TypeResult.forClass(primitive);
                 }
             }
             return TypeResult.forClass(forName(name));
@@ -291,12 +274,27 @@ public final class ImageClassLoader {
         }
     }
 
+    public static Class<?> forPrimitive(String name) {
+        return switch (name) {
+            case "boolean" -> boolean.class;
+            case "char" -> char.class;
+            case "float" -> float.class;
+            case "double" -> double.class;
+            case "byte" -> byte.class;
+            case "short" -> short.class;
+            case "int" -> int.class;
+            case "long" -> long.class;
+            case "void" -> void.class;
+            default -> null;
+        };
+    }
+
     public Class<?> forName(String className) throws ClassNotFoundException {
         return forName(className, false);
     }
 
     public Class<?> forName(String className, boolean initialize) throws ClassNotFoundException {
-        return Class.forName(className, initialize, classLoaderSupport.getClassLoader());
+        return Class.forName(className, initialize, getClassLoader());
     }
 
     public Class<?> forName(String className, Module module) throws ClassNotFoundException {
@@ -407,8 +405,8 @@ public final class ImageClassLoader {
         return classLoaderSupport.getClassLoader();
     }
 
-    public Optional<String> getMainClassFromModule(Object module) {
-        return classLoaderSupport.getMainClassFromModule(module);
+    public static Optional<String> getMainClassFromModule(Object module) {
+        return NativeImageClassLoaderSupport.getMainClassFromModule(module);
     }
 
     public Optional<Module> findModule(String moduleName) {
@@ -437,5 +435,18 @@ public final class ImageClassLoader {
 
     public boolean noEntryForURI(EconomicSet<String> set) {
         return classLoaderSupport.noEntryForURI(set);
+    }
+
+    public Set<Module> getBuilderModules() {
+        assert builderModules != null : "Builder modules not yet initialized.";
+        return builderModules;
+    }
+
+    public void initBuilderModules() {
+        VMError.guarantee(BuildPhaseProvider.isFeatureRegistrationFinished() && ImageSingletons.contains(VMFeature.class),
+                        "Querying builder modules is only possible after feature registration is finished.");
+        Module m0 = ImageSingletons.lookup(VMFeature.class).getClass().getModule();
+        Module m1 = SVMHost.class.getModule();
+        builderModules = m0.equals(m1) ? Set.of(m0) : Set.of(m0, m1);
     }
 }

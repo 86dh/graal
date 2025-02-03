@@ -24,6 +24,7 @@
  */
 package com.oracle.svm.configure.trace;
 
+import java.util.Set;
 import java.util.regex.Pattern;
 
 import com.oracle.svm.configure.filters.ConfigurationFilter;
@@ -84,13 +85,11 @@ public final class AccessAdvisor {
         internalCallerFilter.addOrGetChildren("java.time.**", ConfigurationFilter.Inclusion.Exclude);
         internalCallerFilter.addOrGetChildren("java.util.**", ConfigurationFilter.Inclusion.Exclude);
         internalCallerFilter.addOrGetChildren("java.util.concurrent.atomic.*", ConfigurationFilter.Inclusion.Include); // Atomic*FieldUpdater
+        internalCallerFilter.addOrGetChildren("java.util.concurrent.atomic.AtomicReference", ConfigurationFilter.Inclusion.Exclude); // AtomicReference.<clinit>
         internalCallerFilter.addOrGetChildren("java.util.Collections", ConfigurationFilter.Inclusion.Include); // java.util.Collections.zeroLengthArray
+        // LogRecord.readObject looks up resource bundles
+        internalCallerFilter.addOrGetChildren("java.util.logging.LogRecord", ConfigurationFilter.Inclusion.Include);
         internalCallerFilter.addOrGetChildren("java.util.random.*", ConfigurationFilter.Inclusion.Include); // RandomGeneratorFactory$$Lambda
-        /*
-         * ForkJoinTask.getThrowableException calls Class.getConstructors and
-         * Constructor.newInstance
-         */
-        internalCallerFilter.addOrGetChildren("java.util.concurrent.ForkJoinTask", ConfigurationFilter.Inclusion.Include);
         // LazyClassPathLookupIterator calls Class.forName
         internalCallerFilter.addOrGetChildren("java.util.ServiceLoader$LazyClassPathLookupIterator", ConfigurationFilter.Inclusion.Include);
         internalCallerFilter.addOrGetChildren("javax.crypto.**", ConfigurationFilter.Inclusion.Exclude);
@@ -116,8 +115,8 @@ public final class AccessAdvisor {
         internalCallerFilter.addOrGetChildren("sun.net.www.protocol.http.*", ConfigurationFilter.Inclusion.Include);
         internalCallerFilter.addOrGetChildren("sun.nio.**", ConfigurationFilter.Inclusion.Exclude);
         internalCallerFilter.addOrGetChildren("sun.reflect.**", ConfigurationFilter.Inclusion.Exclude);
-        // ConstructorUtil has wrappers around reflection methods
-        internalCallerFilter.addOrGetChildren("sun.reflect.misc.ConstructorUtil", ConfigurationFilter.Inclusion.Include);
+        // The sun.reflect.misc package provides reflection utilities
+        internalCallerFilter.addOrGetChildren("sun.reflect.misc.*", ConfigurationFilter.Inclusion.Include);
         internalCallerFilter.addOrGetChildren("sun.text.**", ConfigurationFilter.Inclusion.Exclude);
         internalCallerFilter.addOrGetChildren("sun.util.**", ConfigurationFilter.Inclusion.Exclude);
         // Bundles calls Bundles.of
@@ -210,30 +209,54 @@ public final class AccessAdvisor {
         return shouldIgnore(queriedClass, callerClass, true);
     }
 
-    public boolean shouldIgnoreJniMethodLookup(LazyValue<String> queriedClass, LazyValue<String> name, LazyValue<String> signature, LazyValue<String> callerClass) {
+    record JNICallDescriptor(String declaringClass, String name, String signature, boolean required) {
+        public boolean matches(String otherDeclaringClass, String otherName, String otherSignature) {
+            return (declaringClass == null || declaringClass.equals(otherDeclaringClass)) &&
+                            (otherName == null || name.equals(otherName)) &&
+                            (otherSignature == null || signature.equals(otherSignature));
+        }
+    }
+
+    private static final JNICallDescriptor[] JNI_STARTUP_SEQUENCE = new JNICallDescriptor[]{
+                    new JNICallDescriptor("sun.launcher.LauncherHelper", "getApplicationClass", "()Ljava/lang/Class;", true),
+                    new JNICallDescriptor("java.lang.Class", "getCanonicalName", "()Ljava/lang/String;", false),
+                    new JNICallDescriptor("java.lang.String", "lastIndexOf", "(I)I", false),
+                    new JNICallDescriptor("java.lang.String", "substring", "(I)Ljava/lang/String;", false),
+                    new JNICallDescriptor("java.lang.System", "getProperty", "(Ljava/lang/String;)Ljava/lang/String;", false),
+                    new JNICallDescriptor("java.lang.System", "setProperty", "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;", false),
+                    new JNICallDescriptor(null, "main", "([Ljava/lang/String;)V", true),
+    };
+
+    public boolean shouldIgnoreJniLookup(LazyValue<String> queriedClass, LazyValue<String> name, LazyValue<String> signature, LazyValue<String> callerClass) {
         assert !shouldIgnore(queriedClass, callerClass) : "must have been checked before";
         if (!heuristicsEnabled) {
             return false;
         }
-        // Heuristic to ignore this sequence during startup:
-        // 1. Lookup of LauncherHelper.getApplicationClass()
-        // 2. Lookup of Class.getCanonicalName() -- only on Darwin
-        // 3. Lookup of application's main(String[])
-        if ("sun.launcher.LauncherHelper".equals(queriedClass.get())) {
-            if (launchPhase == 0 && "getApplicationClass".equals(name.get()) && "()Ljava/lang/Class;".equals(signature.get())) {
-                launchPhase = 1;
+        if (launchPhase >= 0) {
+            JNICallDescriptor expectedCall = JNI_STARTUP_SEQUENCE[launchPhase];
+            while (!expectedCall.matches(queriedClass.get(), name.get(), signature.get())) {
+                if ("sun.launcher.LauncherHelper".equals(queriedClass.get())) {
+                    return true;
+                }
+                if (!expectedCall.required) {
+                    launchPhase++;
+                    expectedCall = JNI_STARTUP_SEQUENCE[launchPhase];
+                } else {
+                    launchPhase = -1;
+                    return false;
+                }
+            }
+            if (name.get() != null && signature.get() != null) {
+                /*
+                 * We ignore class lookups before field/method lookups but don't skip to the next
+                 * query
+                 */
+                launchPhase++;
+            }
+            if (launchPhase == JNI_STARTUP_SEQUENCE.length) {
+                launchPhase = -1;
             }
             return true;
-        }
-        if (launchPhase == 1 && "getCanonicalName".equals(name.get()) && "()Ljava/lang/String;".equals(signature.get())) {
-            launchPhase = 2;
-            return true;
-        }
-        if (launchPhase > 0) {
-            launchPhase = -1;
-            if ("main".equals(name.get()) && "([Ljava/lang/String;)V".equals(signature.get())) {
-                return true;
-            }
         }
         /*
          * NOTE: JVM invocations cannot be reliably filtered with callerClass == null because these
@@ -241,6 +264,10 @@ public final class AccessAdvisor {
          * executing Java code (yet).
          */
         return false;
+    }
+
+    public static boolean shouldIgnoreResourceLookup(LazyValue<String> resource) {
+        return Set.of("META-INF/services/jdk.vm.ci.services.JVMCIServiceLocator", "META-INF/services/java.lang.System$LoggerFinder").contains(resource.get());
     }
 
     public boolean shouldIgnoreLoadClass(LazyValue<String> queriedClass, LazyValue<String> callerClass) {

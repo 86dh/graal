@@ -32,7 +32,6 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-import com.oracle.graal.pointsto.infrastructure.GraphProvider;
 import com.oracle.graal.pointsto.meta.HostedProviders;
 import com.oracle.svm.core.graal.nodes.LoweredDeadEndNode;
 import com.oracle.svm.core.reflect.ReflectionAccessorHolder;
@@ -103,7 +102,7 @@ public class ReflectionGraphKit extends HostedGraphKit {
     private final List<FixedWithNextNode> illegalArgumentExceptionPaths = new ArrayList<>();
     private final List<ExceptionObjectNode> invocationTargetExceptionPaths = new ArrayList<>();
 
-    public ReflectionGraphKit(DebugContext debug, HostedProviders providers, ResolvedJavaMethod method, GraphProvider.Purpose purpose) {
+    public ReflectionGraphKit(DebugContext debug, HostedProviders providers, ResolvedJavaMethod method) {
         super(debug, providers, method);
     }
 
@@ -292,7 +291,7 @@ public class ReflectionGraphKit extends HostedGraphKit {
         if (fromStackKind == toStackKind) {
             return unboxedValue;
         }
-
+        // Checkstyle: stop FallThrough
         switch (fromStackKind) {
             case Int:
                 switch (toStackKind) {
@@ -324,5 +323,6 @@ public class ReflectionGraphKit extends HostedGraphKit {
             default:
                 throw VMError.shouldNotReachHereUnexpectedInput(fromStackKind); // ExcludeFromJacocoGeneratedReport
         }
+        // Checkstyle: resume FallThrough
     }
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2023, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -59,69 +59,48 @@ public class ErrorContext {
         };
     }
 
-    private Throwable throwable = null;
     @SuppressWarnings("preview") private MemorySegment errnoLocation;
-    private Integer nativeErrno = null;
     final PanamaNFIContext ctx;
 
-    public void setThrowable(Throwable throwable) {
-        this.throwable = throwable;
-    }
-
-    void handleThrowables() {
-        if (throwable != null) {
-            Throwable temp = throwable;
-            throwable = null;
-            throw silenceThrowable(RuntimeException.class, temp);
-        }
-    }
-
-    public boolean nativeErrnoSet() {
-        return (nativeErrno != null);
-    }
-
-    public int getNativeErrno() {
-        return nativeErrno;
-    }
-
-    public void setNativeErrno(int nativeErrno) {
-        this.nativeErrno = nativeErrno;
-    }
-
     @SuppressWarnings({"preview", "restricted"})
-    MemorySegment getErrnoLocation() {
-        Linker linker = Linker.nativeLinker();
-        FunctionDescriptor desc = FunctionDescriptor.of(ValueLayout.JAVA_LONG);
-
-        MemorySegment t = linker.defaultLookup().find(ERRNO_LOCATION).get();
-        MethodHandle handle = linker.downcallHandle(desc);
+    MemorySegment lookupErrnoLocation() {
         try {
-            return MemorySegment.ofAddress((long) handle.invokeExact(t)).reinterpret(4);
-        } catch (Throwable e) {
-            throw new RuntimeException(e);
+            Linker linker = Linker.nativeLinker();
+            FunctionDescriptor desc = FunctionDescriptor.of(ValueLayout.JAVA_LONG);
+            MemorySegment sym = linker.defaultLookup().find(ERRNO_LOCATION).orElseThrow();
+            MethodHandle handle = linker.downcallHandle(desc);
+            try {
+                return MemorySegment.ofAddress((long) handle.invokeExact(sym)).reinterpret(4);
+            } catch (Throwable e) {
+                throw new RuntimeException(e);
+            }
+        } catch (IllegalCallerException ic) {
+            throw NFIError.illegalNativeAccess(null);
         }
     }
 
     void initialize() {
-        errnoLocation = getErrnoLocation();
+        if (this.errnoLocation == null) {
+            errnoLocation = lookupErrnoLocation();
+        }
+    }
+
+    private MemorySegment getErrnoLocation() {
+        assert errnoLocation != null;
+        return errnoLocation;
     }
 
     @SuppressWarnings("preview")
-    int getErrno() {
-        return errnoLocation.get(ValueLayout.JAVA_INT, 0);
+    int getNativeErrno() {
+        return getErrnoLocation().get(ValueLayout.JAVA_INT, 0);
     }
 
     @SuppressWarnings("preview")
-    void setErrno(int newErrno) {
-        errnoLocation.set(ValueLayout.JAVA_INT, 0, newErrno);
+    void setNativeErrno(int newErrno) {
+        getErrnoLocation().set(ValueLayout.JAVA_INT, 0, newErrno);
     }
 
     ErrorContext(PanamaNFIContext ctx, Thread thread) {
         this.ctx = ctx;
-    }
-
-    @SuppressWarnings("unchecked")
-    static <E extends Throwable> RuntimeException silenceThrowable(Class<E> type, Throwable t) throws E {
-        throw (E) t;
     }
 }

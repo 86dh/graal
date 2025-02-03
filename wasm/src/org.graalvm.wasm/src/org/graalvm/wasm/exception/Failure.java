@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2020, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -65,6 +65,7 @@ public enum Failure {
     MALFORMED_IMPORT_KIND(Type.MALFORMED, "malformed import kind"),
     END_OPCODE_EXPECTED(Type.MALFORMED, "END opcode expected"),
     UNEXPECTED_CONTENT_AFTER_LAST_SECTION(Type.MALFORMED, "unexpected content after last section"),
+    MALFORMED_MEMOP_FLAGS(Type.MALFORMED, "malformed memop flags"),
     // GraalWasm-specific:
     INVALID_SECTION_ORDER(Type.MALFORMED, "invalid section order"),
     DISABLED_MULTI_VALUE(Type.MALFORMED, "multi-value is not enabled"),
@@ -147,6 +148,7 @@ public enum Failure {
 
     MEMORY_OVERHEAD_MODE(Type.TRAP, "functions cannot be executed with memory overhead mode enabled"),
     SHARED_MEMORY_WITHOUT_UNSAFE(Type.TRAP, "shared memories are not supported without Unsafe"),
+    DIRECT_BYTE_BUFFER_WITHOUT_UNSAFE(Type.TRAP, "direct ByteBuffer memory access is not supported without Unsafe"),
 
     CALL_STACK_EXHAUSTED(Type.EXHAUSTION, "call stack exhausted"),
     MEMORY_ALLOCATION_FAILED(Type.EXHAUSTION, "could not allocate memory"),
@@ -155,7 +157,9 @@ public enum Failure {
     UNSPECIFIED_INTERNAL(Type.INTERNAL, "unspecified"),
     INCOMPATIBLE_OPTIONS(Type.INTERNAL, "some of the provided options are incompatible"),
 
-    NON_REPRESENTABLE_EXTRA_DATA_VALUE(Type.MALFORMED, "value cannot be represented in extra data");
+    NON_REPRESENTABLE_EXTRA_DATA_VALUE(Type.MALFORMED, "value cannot be represented in extra data"),
+
+    INVALID_LANE_INDEX(Type.INVALID, "invalid lane index");
 
     public enum Type {
         TRAP("trap"),

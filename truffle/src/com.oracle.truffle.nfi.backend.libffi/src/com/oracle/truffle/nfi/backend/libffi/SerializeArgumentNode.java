@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -389,6 +389,12 @@ abstract class SerializeArgumentNode extends Node {
         short readOther(ByteOrder order, long offset) throws UnsupportedMessageException {
             throw UnsupportedMessageException.create();
         }
+
+        @SuppressWarnings({"static-method", "unused"})
+        @ExportMessage
+        void readBuffer(long offset, byte[] destination, int destinationOffset, int length) throws UnsupportedMessageException {
+            throw UnsupportedMessageException.create();
+        }
     }
 
     abstract static class SerializeSerializableNode extends SerializeArgumentNode {
@@ -431,7 +437,7 @@ abstract class SerializeArgumentNode extends Node {
         @Specialization(limit = "3", replaces = {"putPointer", "putNull"})
         static void putGeneric(Object arg, NativeArgumentBuffer buffer,
                         @CachedLibrary("arg") InteropLibrary interop,
-                        @Bind("$node") Node node,
+                        @Bind Node node,
                         @Bind("type.size") int size,
                         @Cached InlinedBranchProfile exception) throws UnsupportedTypeException {
             try {
@@ -498,7 +504,7 @@ abstract class SerializeArgumentNode extends Node {
         @Specialization(limit = "3", replaces = {"putPointer", "putString", "putNull"})
         static void putGeneric(Object value, NativeArgumentBuffer buffer,
                         @CachedLibrary("value") InteropLibrary interop,
-                        @Bind("$node") Node node,
+                        @Bind Node node,
                         @Bind("type.size") int size,
                         @Cached InlinedBranchProfile exception) throws UnsupportedTypeException {
             try {

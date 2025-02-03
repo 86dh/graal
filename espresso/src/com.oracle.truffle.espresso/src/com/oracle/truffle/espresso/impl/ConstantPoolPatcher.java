@@ -22,22 +22,23 @@
  */
 package com.oracle.truffle.espresso.impl;
 
+import java.util.Arrays;
+import java.util.Map;
+import java.util.Set;
+
 import com.oracle.truffle.espresso.classfile.ClassfileStream;
 import com.oracle.truffle.espresso.classfile.ConstantPool;
-import com.oracle.truffle.espresso.descriptors.ByteSequence;
-import com.oracle.truffle.espresso.descriptors.Symbol;
+import com.oracle.truffle.espresso.classfile.ParserException;
+import com.oracle.truffle.espresso.classfile.descriptors.ByteSequence;
+import com.oracle.truffle.espresso.classfile.descriptors.Name;
+import com.oracle.truffle.espresso.classfile.descriptors.Symbol;
 import com.oracle.truffle.espresso.redefinition.InnerClassRedefiner;
 import com.oracle.truffle.espresso.runtime.EspressoContext;
 
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.Map;
-
 public class ConstantPoolPatcher {
-    public static void getDirectInnerClassNames(Symbol<Symbol.Name> fileSystemName, byte[] bytes, ArrayList<Symbol<Symbol.Name>> innerNames, EspressoContext context)
-                    throws ClassFormatError {
+    public static void getDirectInnerAnonymousClassNames(Symbol<Name> fileSystemName, byte[] bytes, Set<Symbol<Name>> innerNames, EspressoContext context)
+                    throws ParserException.ClassFormatError {
         ClassfileStream stream = new ClassfileStream(bytes, null);
-        ByteSequence fileNameBytes = fileSystemName.subSequence(0, fileSystemName.length());
         // skip magic and version - 8 bytes
         stream.skip(8);
         final int length = stream.readU2();
@@ -50,10 +51,9 @@ public class ConstantPoolPatcher {
             switch (tag) {
                 case UTF8:
                     ByteSequence byteSequence = stream.readByteSequenceUTF();
-                    if (byteSequence.contentStartsWith(fileNameBytes) && !byteSequence.contentEquals(fileNameBytes)) {
-                        if (InnerClassRedefiner.ANON_INNER_CLASS_PATTERN.matcher(byteSequence.toString()).matches()) {
-                            innerNames.add(context.getNames().getOrCreate(byteSequence));
-                        }
+                    if (isDirectAnonymousInnerClass(fileSystemName, byteSequence)) {
+                        assert InnerClassRedefiner.ANON_INNER_CLASS_PATTERN.matcher(byteSequence.toString()).matches();
+                        innerNames.add(context.getNames().getOrCreate(byteSequence));
                     }
                     break;
                 case CLASS:
@@ -89,13 +89,33 @@ public class ConstantPoolPatcher {
                     stream.readU2();
                     break;
                 default:
-                    throw new ClassFormatError();
+                    throw new ParserException.ClassFormatError("Unexpected tag: " + tag);
             }
             i++;
         }
     }
 
-    public static byte[] patchConstantPool(byte[] bytes, Map<Symbol<Symbol.Name>, Symbol<Symbol.Name>> rules, EspressoContext context) throws ClassFormatError {
+    private static boolean isDirectAnonymousInnerClass(ByteSequence outer, ByteSequence inner) {
+        if (!inner.contentStartsWith(outer) || inner.length() < outer.length() + 2) {
+            return false;
+        }
+        int i = outer.length();
+        if (inner.byteAt(i++) != '$') {
+            return false;
+        }
+        do {
+            if (!isDecimalDigit(inner.byteAt(i++))) {
+                return false;
+            }
+        } while (i < inner.length());
+        return true;
+    }
+
+    private static boolean isDecimalDigit(byte c) {
+        return '0' <= c && c <= '9';
+    }
+
+    public static byte[] patchConstantPool(byte[] bytes, Map<Symbol<Name>, Symbol<Name>> rules, EspressoContext context) throws ParserException.ClassFormatError {
         byte[] result = Arrays.copyOf(bytes, bytes.length);
         ClassfileStream stream = new ClassfileStream(bytes, null);
 
@@ -113,15 +133,15 @@ public class ConstantPoolPatcher {
                 case UTF8:
                     int position = stream.getPosition() + 2; // utfLength is first two bytes
                     ByteSequence byteSequence = stream.readByteSequenceUTF();
-                    Symbol<Symbol.Name> asSymbol = context.getNames().getOrCreate(byteSequence);
+                    Symbol<Name> asSymbol = context.getNames().getOrCreate(byteSequence);
 
                     if (rules.containsKey(asSymbol)) {
-                        int originalLegth = byteSequence.length();
-                        Symbol<Symbol.Name> replacedSymbol = rules.get(asSymbol);
-                        if (originalLegth == replacedSymbol.length()) {
+                        int originalLength = byteSequence.length();
+                        Symbol<Name> replacedSymbol = rules.get(asSymbol);
+                        if (originalLength == replacedSymbol.length()) {
                             replacedSymbol.writeTo(result, position + byteArrayGrowth);
                         } else {
-                            int diff = replacedSymbol.length() - originalLegth;
+                            int diff = replacedSymbol.length() - originalLength;
                             byteArrayGrowth += diff;
 
                             // make room for the longer class name
@@ -175,7 +195,7 @@ public class ConstantPoolPatcher {
                     stream.readU2();
                     break;
                 default:
-                    throw new ClassFormatError();
+                    throw new ParserException.ClassFormatError("Unexpected tag: " + tag);
             }
             i++;
         }

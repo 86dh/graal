@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2020, 2024, Oracle and/or its affiliates. All rights reserved.
  * Copyright (c) 2020, 2020, Red Hat Inc. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
@@ -36,7 +36,6 @@ import java.util.Map;
 
 import org.graalvm.collections.EconomicMap;
 import org.graalvm.collections.EconomicSet;
-import jdk.graal.compiler.debug.DebugContext;
 
 import com.oracle.objectfile.debugentry.range.PrimaryRange;
 import com.oracle.objectfile.debugentry.range.Range;
@@ -49,6 +48,7 @@ import com.oracle.objectfile.debuginfo.DebugInfoProvider.DebugLocationInfo;
 import com.oracle.objectfile.debuginfo.DebugInfoProvider.DebugTypeInfo.DebugTypeKind;
 import com.oracle.objectfile.elf.dwarf.DwarfDebugInfo;
 
+import jdk.graal.compiler.debug.DebugContext;
 import jdk.vm.ci.meta.ResolvedJavaType;
 
 /**
@@ -167,15 +167,19 @@ public abstract class DebugInfoBase {
     /**
      * Number of bits oops are left shifted by when using compressed oops.
      */
-    private int oopCompressShift;
+    private int compressionShift;
+    /**
+     * Bit mask used for tagging oops.
+     */
+    private int reservedBitsMask;
     /**
      * Number of low order bits used for tagging oops.
      */
-    private int oopTagsCount;
+    private int numReservedBits;
     /**
      * Number of bytes used to store an oop reference.
      */
-    private int oopReferenceSize;
+    private int referenceSize;
     /**
      * Number of bytes used to store a raw pointer.
      */
@@ -183,11 +187,11 @@ public abstract class DebugInfoBase {
     /**
      * Alignment of object memory area (and, therefore, of any oop) in bytes.
      */
-    private int oopAlignment;
+    private int objectAlignment;
     /**
      * Number of bits in oop which are guaranteed 0 by virtue of alignment.
      */
-    private int oopAlignShift;
+    private int numAlignmentBits;
     /**
      * The compilation directory in which to look for source files as a {@link String}.
      */
@@ -207,12 +211,13 @@ public abstract class DebugInfoBase {
     public DebugInfoBase(ByteOrder byteOrder) {
         this.byteOrder = byteOrder;
         this.useHeapBase = true;
-        this.oopTagsCount = 0;
-        this.oopCompressShift = 0;
-        this.oopReferenceSize = 0;
+        this.reservedBitsMask = 0;
+        this.numReservedBits = 0;
+        this.compressionShift = 0;
+        this.referenceSize = 0;
         this.pointerSize = 0;
-        this.oopAlignment = 0;
-        this.oopAlignShift = 0;
+        this.objectAlignment = 0;
+        this.numAlignmentBits = 0;
         this.hubClassEntry = null;
         this.compiledCodeMax = 0;
         // create and index an empty dir with index 0.
@@ -245,35 +250,33 @@ public abstract class DebugInfoBase {
         /*
          * Save count of low order tag bits that may appear in references.
          */
-        int oopTagsMask = debugInfoProvider.oopTagsMask();
+        reservedBitsMask = debugInfoProvider.reservedBitsMask();
 
-        /* Tag bits must be between 0 and 32 for us to emit as DW_OP_lit<n>. */
-        assert oopTagsMask >= 0 && oopTagsMask < 32;
         /* Mask must be contiguous from bit 0. */
-        assert ((oopTagsMask + 1) & oopTagsMask) == 0;
+        assert ((reservedBitsMask + 1) & reservedBitsMask) == 0;
 
-        oopTagsCount = Integer.bitCount(oopTagsMask);
+        numReservedBits = Integer.bitCount(reservedBitsMask);
 
         /* Save amount we need to shift references by when loading from an object field. */
-        oopCompressShift = debugInfoProvider.oopCompressShift();
+        compressionShift = debugInfoProvider.compressionShift();
 
         /* shift bit count must be either 0 or 3 */
-        assert (oopCompressShift == 0 || oopCompressShift == 3);
+        assert (compressionShift == 0 || compressionShift == 3);
 
         /* Save number of bytes in a reference field. */
-        oopReferenceSize = debugInfoProvider.oopReferenceSize();
+        referenceSize = debugInfoProvider.referenceSize();
 
         /* Save pointer size of current target. */
         pointerSize = debugInfoProvider.pointerSize();
 
         /* Save alignment of a reference. */
-        oopAlignment = debugInfoProvider.oopAlignment();
+        objectAlignment = debugInfoProvider.objectAlignment();
 
         /* Save alignment of a reference. */
-        oopAlignShift = Integer.bitCount(oopAlignment - 1);
+        numAlignmentBits = Integer.bitCount(objectAlignment - 1);
 
         /* Reference alignment must be 8 bytes. */
-        assert oopAlignment == 8;
+        assert objectAlignment == 8;
 
         /* retrieve limit for Java code address range */
         compiledCodeMax = debugInfoProvider.compiledCodeMax();
@@ -351,10 +354,10 @@ public abstract class DebugInfoBase {
                 String provenance = debugDataInfo.getProvenance();
                 String typeName = debugDataInfo.getTypeName();
                 String partitionName = debugDataInfo.getPartition();
-                /* Address is heap-register relative pointer. */
-                long address = debugDataInfo.getAddress();
+                /* Offset is relative to heap-base register. */
+                long offset = debugDataInfo.getOffset();
                 long size = debugDataInfo.getSize();
-                debugContext.log(DebugContext.INFO_LEVEL, "Data: address 0x%x size 0x%x type %s partition %s provenance %s ", address, size, typeName, partitionName, provenance);
+                debugContext.log(DebugContext.INFO_LEVEL, "Data: offset 0x%x size 0x%x type %s partition %s provenance %s ", offset, size, typeName, partitionName, provenance);
             }
         }));
         // populate a file and dir list and associated index for each class entry
@@ -702,40 +705,40 @@ public abstract class DebugInfoBase {
         return useHeapBase;
     }
 
-    public byte oopTagsMask() {
-        return (byte) ((1 << oopTagsCount) - 1);
+    public int reservedBitsMask() {
+        return reservedBitsMask;
     }
 
-    public byte oopTagsShift() {
-        return (byte) oopTagsCount;
+    public int numReservedBits() {
+        return numReservedBits;
     }
 
-    public int oopCompressShift() {
-        return oopCompressShift;
+    public int compressionShift() {
+        return compressionShift;
     }
 
-    public int oopReferenceSize() {
-        return oopReferenceSize;
+    public int referenceSize() {
+        return referenceSize;
     }
 
     public int pointerSize() {
         return pointerSize;
     }
 
-    public int oopAlignment() {
-        return oopAlignment;
+    public int objectAlignment() {
+        return objectAlignment;
     }
 
-    public int oopAlignShift() {
-        return oopAlignShift;
+    public int numAlignmentBits() {
+        return numAlignmentBits;
     }
 
     public String getCachePath() {
         return cachePath;
     }
 
-    public boolean isHubClassEntry(ClassEntry classEntry) {
-        return classEntry.getTypeName().equals(DwarfDebugInfo.HUB_TYPE_NAME);
+    public boolean isHubClassEntry(StructureTypeEntry typeEntry) {
+        return typeEntry.getTypeName().equals(DwarfDebugInfo.HUB_TYPE_NAME);
     }
 
     public ClassEntry getHubClassEntry() {

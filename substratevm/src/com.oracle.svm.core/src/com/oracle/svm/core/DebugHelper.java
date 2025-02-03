@@ -26,7 +26,6 @@ package com.oracle.svm.core;
 
 import java.util.function.BooleanSupplier;
 
-import jdk.graal.compiler.word.Word;
 import org.graalvm.nativeimage.IsolateThread;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
@@ -34,12 +33,10 @@ import org.graalvm.nativeimage.c.function.CEntryPoint;
 import org.graalvm.nativeimage.c.function.CEntryPoint.Publish;
 import org.graalvm.nativeimage.c.function.CodePointer;
 import org.graalvm.word.Pointer;
-import org.graalvm.word.WordFactory;
 
+import com.oracle.svm.core.c.SetThreadAndHeapBasePrologue;
 import com.oracle.svm.core.c.function.CEntryPointOptions;
 import com.oracle.svm.core.c.function.CEntryPointOptions.NoEpilogue;
-import com.oracle.svm.core.graal.nodes.WriteCurrentVMThreadNode;
-import com.oracle.svm.core.graal.snippets.CEntryPointSnippets;
 import com.oracle.svm.core.heap.Heap;
 import com.oracle.svm.core.heap.ObjectHeader;
 import com.oracle.svm.core.heap.ReferenceAccess;
@@ -47,7 +44,8 @@ import com.oracle.svm.core.hub.DynamicHub;
 import com.oracle.svm.core.hub.LayoutEncoding;
 import com.oracle.svm.core.log.Log;
 import com.oracle.svm.core.snippets.KnownIntrinsics;
-import com.oracle.svm.core.thread.VMThreads;
+
+import jdk.graal.compiler.word.Word;
 
 /**
  * All {@link CEntryPoint} methods in here can be directly called from a debugger.
@@ -280,7 +278,7 @@ public class DebugHelper {
         @CEntryPoint(name = "svm_dbg_print_fatalErrorDiagnostics", include = IncludeDebugHelperMethods.class, publishAs = Publish.SymbolOnly)
         @CEntryPointOptions(prologue = SetThreadAndHeapBasePrologue.class, epilogue = NoEpilogue.class)
         public static void printFatalErrorDiagnostics(@SuppressWarnings("unused") IsolateThread thread, Pointer sp, CodePointer ip) {
-            SubstrateDiagnostics.printFatalError(Log.log(), sp, ip, WordFactory.nullPointer(), false);
+            SubstrateDiagnostics.printFatalError(Log.log(), sp, ip, Word.nullPointer(), false);
         }
 
         @Uninterruptible(reason = "Just to keep the verification happy.", calleeMustBe = false)
@@ -332,18 +330,8 @@ public class DebugHelper {
         return hub.isReferenceInstanceClass();
     }
 
-    private static class SetThreadAndHeapBasePrologue implements CEntryPointOptions.Prologue {
-        @Uninterruptible(reason = "prologue")
-        public static void enter(IsolateThread thread) {
-            WriteCurrentVMThreadNode.writeCurrentVMThread(thread);
-            if (SubstrateOptions.SpawnIsolates.getValue()) {
-                CEntryPointSnippets.setHeapBase(VMThreads.IsolateTL.get());
-            }
-        }
-    }
-
     @Platforms(Platform.HOSTED_ONLY.class)
-    private static class IncludeDebugHelperMethods implements BooleanSupplier {
+    private static final class IncludeDebugHelperMethods implements BooleanSupplier {
         @Override
         public boolean getAsBoolean() {
             return SubstrateOptions.IncludeDebugHelperMethods.getValue();

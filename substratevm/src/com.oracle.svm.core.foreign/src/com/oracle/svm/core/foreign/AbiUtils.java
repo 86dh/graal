@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2023, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -25,6 +25,7 @@
 package com.oracle.svm.core.foreign;
 
 import static com.oracle.svm.core.util.VMError.unsupportedFeature;
+import static jdk.vm.ci.amd64.AMD64.rax;
 
 import java.lang.foreign.FunctionDescriptor;
 import java.lang.foreign.Linker;
@@ -38,27 +39,44 @@ import java.util.EnumMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.function.Consumer;
 import java.util.stream.Stream;
 
-import jdk.graal.compiler.api.replacements.Fold;
-import jdk.graal.compiler.nodes.ValueNode;
-import jdk.graal.compiler.nodes.calc.ReinterpretNode;
 import org.graalvm.nativeimage.ImageSingletons;
+import org.graalvm.nativeimage.Isolate;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
+import org.graalvm.word.Pointer;
 
 import com.oracle.svm.core.SubstrateTargetDescription;
+import com.oracle.svm.core.config.ConfigurationValues;
+import com.oracle.svm.core.foreign.AbiUtils.Adapter.Adaptation;
 import com.oracle.svm.core.graal.code.AssignedLocation;
 import com.oracle.svm.core.headers.LibC;
 import com.oracle.svm.core.headers.WindowsAPIs;
+import com.oracle.svm.core.util.BasedOnJDKClass;
+import com.oracle.svm.core.util.BasedOnJDKFile;
 import com.oracle.svm.core.util.VMError;
 
+import jdk.graal.compiler.api.replacements.Fold;
+import jdk.graal.compiler.asm.amd64.AMD64Address;
+import jdk.graal.compiler.asm.amd64.AMD64Assembler;
+import jdk.graal.compiler.asm.amd64.AMD64BaseAssembler;
+import jdk.graal.compiler.graph.Node;
+import jdk.graal.compiler.nodes.ValueNode;
+import jdk.graal.compiler.nodes.calc.AddNode;
+import jdk.graal.compiler.nodes.calc.ReinterpretNode;
+import jdk.graal.compiler.word.Word;
+import jdk.graal.compiler.word.WordCastNode;
 import jdk.internal.foreign.CABI;
+import jdk.internal.foreign.abi.ABIDescriptor;
 import jdk.internal.foreign.abi.Binding;
 import jdk.internal.foreign.abi.CallingSequence;
 import jdk.internal.foreign.abi.LinkerOptions;
+import jdk.internal.foreign.abi.NativeEntryPoint;
 import jdk.internal.foreign.abi.VMStorage;
 import jdk.internal.foreign.abi.x64.X86_64Architecture;
+import jdk.internal.foreign.abi.x64.sysv.CallArranger;
 import jdk.vm.ci.amd64.AMD64;
 import jdk.vm.ci.code.Register;
 import jdk.vm.ci.meta.JavaKind;
@@ -68,12 +86,17 @@ import jdk.vm.ci.meta.PlatformKind;
  * Utils for ABI specific functionalities in the context of the Java Foreign API. Provides methods
  * to transform JDK-internal data-structures into SubstrateVM ones.
  */
+@BasedOnJDKClass(jdk.internal.foreign.abi.SharedUtils.class)
 public abstract class AbiUtils {
 
     @Platforms(Platform.HOSTED_ONLY.class)
     public static final class Adapter {
         private static boolean allEqual(int reference, int... values) {
             return Arrays.stream(values).allMatch(v -> v == reference);
+        }
+
+        private static boolean allSameSize(List<?> reference, List<?>... others) {
+            return Arrays.stream(others).allMatch(v -> v.size() == reference.size());
         }
 
         private Adapter() {
@@ -84,18 +107,26 @@ public abstract class AbiUtils {
             CaptureBufferAddress
         }
 
-        public record AdaptationResult(
-                        Map<Extracted, ValueNode> extractedArguments,
-                        List<ValueNode> arguments,
-                        List<AssignedLocation> parametersAssignment,
-                        List<AssignedLocation> returnsAssignment,
-                        MethodType callType) {
-            public ValueNode getArgument(Extracted id) {
-                return extractedArguments.get(id);
+        public static class Result {
+            public record FullNativeAdaptation(
+                            Map<Extracted, ValueNode> extractedArguments,
+                            List<ValueNode> arguments,
+                            List<AssignedLocation> parametersAssignment,
+                            List<AssignedLocation> returnsAssignment,
+                            MethodType callType,
+                            List<Node> nodesToAppendToGraph) {
+                public ValueNode getArgument(Extracted id) {
+                    return extractedArguments.get(id);
+                }
+            }
+
+            public record TypeAdaptation(List<AssignedLocation> parametersAssignment, MethodType callType) {
             }
         }
 
-        public static AdaptationResult adapt(AbiUtils self, List<Adaptation> adaptations, List<ValueNode> originalArguments, NativeEntryPointInfo nep) {
+        public static Result.FullNativeAdaptation adaptToNative(AbiUtils self, List<Adaptation> adaptations, List<ValueNode> originalArguments, NativeEntryPointInfo nep) {
+            originalArguments = Collections.unmodifiableList(originalArguments);
+
             AssignedLocation[] originalAssignment = self.toMemoryAssignment(nep.parametersAssignment(), false);
             VMError.guarantee(allEqual(adaptations.size(), originalArguments.size(), nep.methodType().parameterCount(), originalAssignment.length));
 
@@ -103,30 +134,56 @@ public abstract class AbiUtils {
             List<ValueNode> arguments = new ArrayList<>();
             List<AssignedLocation> assignment = new ArrayList<>();
             List<Class<?>> argumentTypes = new ArrayList<>();
+            List<Node> nodesToAppendToGraph = new ArrayList<>();
 
-            for (int i = 0; i < adaptations.size(); ++i) {
-                Adaptation adaptation = adaptations.get(i);
+            int i = 0;
+            for (Adaptation a : adaptations) {
+                Adaptation adaptation = a;
                 if (adaptation == null) {
                     adaptation = NOOP;
                 }
 
-                arguments.addAll(adaptation.apply(originalArguments.get(i), extractedArguments));
+                arguments.addAll(adaptation.apply(originalArguments.get(i), extractedArguments, originalArguments, i, nodesToAppendToGraph::add));
                 assignment.addAll(adaptation.apply(originalAssignment[i]));
                 argumentTypes.addAll(adaptation.apply(nep.methodType().parameterType(i)));
 
-                VMError.guarantee(allEqual(arguments.size(), assignment.size(), argumentTypes.size()));
+                VMError.guarantee(allSameSize(arguments, assignment, argumentTypes));
+                ++i;
             }
+            assert i == nep.methodType().parameterCount();
 
             // Sanity checks
             VMError.guarantee(extractedArguments.containsKey(Extracted.CallTarget));
             VMError.guarantee(!nep.capturesCallState() || extractedArguments.containsKey(Extracted.CaptureBufferAddress));
-            for (int i = 0; i < arguments.size(); ++i) {
-                VMError.guarantee(arguments.get(i) != null);
-                VMError.guarantee(!assignment.get(i).isPlaceholder() || (i == 0 && nep.needsReturnBuffer()));
+            for (int j = 0; j < arguments.size(); ++j) {
+                VMError.guarantee(arguments.get(j) != null);
+                VMError.guarantee(!assignment.get(j).isPlaceholder() || (j == 0 && nep.needsReturnBuffer()));
             }
 
-            return new AdaptationResult(extractedArguments, arguments, assignment, Arrays.stream(self.toMemoryAssignment(nep.returnsAssignment(), true)).toList(),
-                            MethodType.methodType(nep.methodType().returnType(), argumentTypes));
+            return new Result.FullNativeAdaptation(extractedArguments, arguments, assignment, Arrays.stream(self.toMemoryAssignment(nep.returnsAssignment(), true)).toList(),
+                            MethodType.methodType(nep.methodType().returnType(), argumentTypes), nodesToAppendToGraph);
+        }
+
+        public static Result.TypeAdaptation adaptFromNative(AbiUtils self, List<Adaptation> adaptations, JavaEntryPointInfo jep) {
+            AssignedLocation[] originalAssignment = self.toMemoryAssignment(jep.parametersAssignment(), false);
+
+            List<AssignedLocation> assignment = new ArrayList<>();
+            List<Class<?>> argumentTypes = new ArrayList<>();
+
+            int i = 0;
+            for (Adaptation a : adaptations) {
+                Adaptation adaptation = a;
+                if (adaptation == null) {
+                    adaptation = NOOP;
+                }
+
+                assignment.addAll(adaptation.apply(originalAssignment[i]));
+                argumentTypes.addAll(adaptation.apply(jep.handleType().parameterType(i)));
+                ++i;
+            }
+            assert i == jep.handleType().parameterCount();
+
+            return new Result.TypeAdaptation(assignment, MethodType.methodType(jep.handleType().returnType(), argumentTypes));
         }
 
         /**
@@ -148,7 +205,8 @@ public abstract class AbiUtils {
 
             public abstract List<AssignedLocation> apply(AssignedLocation parameter);
 
-            public abstract List<ValueNode> apply(ValueNode parameter, Map<Extracted, ValueNode> extractedArguments);
+            public abstract List<ValueNode> apply(ValueNode parameter, Map<Extracted, ValueNode> extractedArguments, List<ValueNode> originalArguments, int originalArgumentIndex,
+                            Consumer<Node> appendToGraph);
         }
 
         private static final Adaptation NOOP = new Adaptation() {
@@ -163,7 +221,8 @@ public abstract class AbiUtils {
             }
 
             @Override
-            public List<ValueNode> apply(ValueNode parameter, Map<Extracted, ValueNode> extractedArguments) {
+            public List<ValueNode> apply(ValueNode parameter, Map<Extracted, ValueNode> extractedArguments, List<ValueNode> originalArguments, int originalArgumentIndex,
+                            Consumer<Node> appendToGraph) {
                 return List.of(parameter);
             }
         };
@@ -173,15 +232,23 @@ public abstract class AbiUtils {
         }
 
         public static Adaptation extract(Extracted as, Class<?> type) {
-            return new Extract(Objects.requireNonNull(as), Objects.requireNonNull(type));
+            return new ExtractSingle(as, type);
+        }
+
+        public static Adaptation extractSegmentPair(Extracted as, Class<?> type) {
+            return new ExtractSegmentPair(as);
         }
 
         public static Adaptation drop() {
-            return Extract.DROP;
+            return Drop.SINGLETON;
         }
 
         public static Adaptation reinterpret(JavaKind to) {
             return new Reinterpret(to);
+        }
+
+        public static Adaptation computeAddressFromSegmentPair() {
+            return ComputeAddressFromSegmentPair.SINGLETON;
         }
 
         private static final class CheckType extends Adaptation {
@@ -205,7 +272,8 @@ public abstract class AbiUtils {
             }
 
             @Override
-            public List<ValueNode> apply(ValueNode parameter, Map<Extracted, ValueNode> extractedArguments) {
+            public List<ValueNode> apply(ValueNode parameter, Map<Extracted, ValueNode> extractedArguments, List<ValueNode> originalArguments, int originalArgumentIndex,
+                            Consumer<Node> appendToGraph) {
                 return List.of(parameter);
             }
         }
@@ -228,19 +296,122 @@ public abstract class AbiUtils {
             }
 
             @Override
-            public List<ValueNode> apply(ValueNode parameter, Map<Extracted, ValueNode> extractedArguments) {
-                return List.of(ReinterpretNode.reinterpret(to, parameter));
+            public List<ValueNode> apply(ValueNode parameter, Map<Extracted, ValueNode> extractedArguments, List<ValueNode> originalArguments, int originalArgumentIndex,
+                            Consumer<Node> appendToGraph) {
+                var reinterpreted = ReinterpretNode.reinterpret(to, parameter);
+                appendToGraph.accept(reinterpreted);
+                return List.of(reinterpreted);
             }
         }
 
-        private static final class Extract extends Adaptation {
-            private static Extract DROP = new Extract(null, null);
-            private final Extracted as;
+        /**
+         * This adaptation is used when a downcall uses Linker.Option.critical(true). <br>
+         * When an argument whose layout is an AddressLayout is passed in a downcall, it must be
+         * passed as a MemorySegment from the Java side. From these, the downcall stub extracts a
+         * raw pointer to the data and calls the downcall with it. <br>
+         * Usually, only {@link jdk.internal.foreign.NativeMemorySegmentImpl} can be passed
+         * (segments allocated using an Arena), and these have a method `unsafeGetOffset` which
+         * straightforwardly returns the raw pointer. <br>
+         * However, when `allowHeapAccess` is true (the argument to Linker.Option.critical), one may
+         * pass a {@link HeapMemorySegmentImpl} as well. For reasons detailed in its documentation,
+         * heap segments are represented as an Object + offset pair, where the raw pointer should be
+         * derived from their sum. <br>
+         * Hence, when `allowHeapAccess` is true,
+         * {@link CallArranger.UnboxBindingCalculator#getBindings(Class, MemoryLayout)} passes two
+         * arguments for every AddressLayout, the result of `unsafeGetBase` (of type Object) and
+         * `unsafeGetOffset` (of type Long). <br>
+         * Then, in the JVM, somewhere in the native implementation of
+         * {@link NativeEntryPoint#makeDowncallStub(MethodType, ABIDescriptor, VMStorage[], VMStorage[], boolean, int, boolean)},
+         * some code is generated which adds together the two values. Hence, when generating the
+         * stub graph in SVM, make sure that the downcall performs the sum as well. <br>
+         * <br>
+         * Note that the only time when a VMStorage (such as in nep.parameterAssignments()) is
+         * {@code null} is when Linker.Option.critical(true) is passed. See
+         * {@link CallArranger.UnboxBindingCalculator#getBindings(Class, MemoryLayout)}.
+         */
+        private static final class ComputeAddressFromSegmentPair extends Adaptation {
+            private static final ComputeAddressFromSegmentPair SINGLETON = new ComputeAddressFromSegmentPair();
+
+            private ComputeAddressFromSegmentPair() {
+            }
+
+            @Override
+            public List<Class<?>> apply(Class<?> parameter) {
+                return List.of(long.class);
+            }
+
+            @Override
+            public List<AssignedLocation> apply(AssignedLocation parameter) {
+                return List.of(parameter);
+            }
+
+            @Override
+            public List<ValueNode> apply(ValueNode parameter, Map<Extracted, ValueNode> extractedArguments, List<ValueNode> originalArguments, int originalArgumentIndex,
+                            Consumer<Node> appendToGraph) {
+                return List.of(computeAbsolutePointerFromSegmentPair(parameter, originalArguments, originalArgumentIndex, appendToGraph));
+            }
+
+            static ValueNode computeAbsolutePointerFromSegmentPair(ValueNode parameter, List<ValueNode> originalArguments, int originalArgumentIndex, Consumer<Node> appendToGraph) {
+                var offsetArg = originalArguments.get(originalArgumentIndex + 1);
+
+                /*
+                 * It would be most suitable to use OffsetAddressNode here (followed by
+                 * WordCastNode.addressToWord) but NativeMemorySegmentImpls return null for
+                 * `unsafeGetBase`,which seems to break the graph somewhere later.
+                 */
+                var basePointer = WordCastNode.objectToUntrackedPointer(parameter, ConfigurationValues.getWordKind());
+                appendToGraph.accept(basePointer);
+                var absolutePointer = AddNode.add(basePointer, offsetArg);
+                appendToGraph.accept(absolutePointer);
+
+                return absolutePointer;
+            }
+        }
+
+        /**
+         * Extract adaptations consume one or more stub parameters. In this case, "consuming" means
+         * that the adapted parameter(s) won't be passed to the stub's target but will be used by
+         * the stub itself. The result is usually one ValueNode that will be put into the
+         * 'extractedArguments' table.
+         */
+        private abstract static class Extract extends Adaptation {
+            final Extracted as;
+
+            private Extract(Extracted as) {
+                this.as = as;
+            }
+
+            @Override
+            public final List<AssignedLocation> apply(AssignedLocation parameter) {
+                return List.of();
+            }
+        }
+
+        private static final class Drop extends Extract {
+            private static final Drop SINGLETON = new Drop();
+
+            private Drop() {
+                super(null);
+            }
+
+            @Override
+            public List<Class<?>> apply(Class<?> parameter) {
+                return List.of();
+            }
+
+            @Override
+            public List<ValueNode> apply(ValueNode parameter, Map<Extracted, ValueNode> extractedArguments, List<ValueNode> originalArguments, int originalArgumentIndex,
+                            Consumer<Node> appendToGraph) {
+                return List.of();
+            }
+        }
+
+        private static final class ExtractSingle extends Extract {
             private final Class<?> type;
 
-            private Extract(Extracted as, Class<?> type) {
-                this.as = as;
-                this.type = type;
+            private ExtractSingle(Extracted as, Class<?> type) {
+                super(Objects.requireNonNull(as));
+                this.type = Objects.requireNonNull(type);
             }
 
             @Override
@@ -252,18 +423,45 @@ public abstract class AbiUtils {
             }
 
             @Override
-            public List<AssignedLocation> apply(AssignedLocation parameter) {
-                return List.of();
-            }
-
-            @Override
-            public List<ValueNode> apply(ValueNode parameter, Map<Extracted, ValueNode> extractedArguments) {
+            public List<ValueNode> apply(ValueNode parameter, Map<Extracted, ValueNode> extractedArguments, List<ValueNode> originalArguments, int originalArgumentIndex,
+                            Consumer<Node> appendToGraph) {
                 if (as != null) {
                     if (extractedArguments.containsKey(as)) {
                         throw new IllegalStateException("%s was already extracted (%s).".formatted(as, extractedArguments.get(as)));
                     }
                     extractedArguments.put(as, parameter);
                 }
+                return List.of();
+            }
+        }
+
+        /**
+         * Similar to {@link ComputeAddressFromSegmentPair}, consumes two parameters, i.e., an
+         * Object + offset pair, and creates and AddNode that computes the absolute address.
+         */
+        private static final class ExtractSegmentPair extends Extract {
+
+            private ExtractSegmentPair(Extracted as) {
+                super(Objects.requireNonNull(as));
+            }
+
+            @Override
+            public List<Class<?>> apply(Class<?> parameter) {
+                if (parameter != Object.class) {
+                    throw new IllegalArgumentException("Expected type " + Object.class + ", got " + parameter);
+                }
+                return List.of();
+            }
+
+            @Override
+            public List<ValueNode> apply(ValueNode parameter, Map<Extracted, ValueNode> extractedArguments, List<ValueNode> originalArguments, int originalArgumentIndex,
+                            Consumer<Node> appendToGraph) {
+                assert as != null;
+                if (extractedArguments.containsKey(as)) {
+                    throw new IllegalStateException("%s was already extracted (%s).".formatted(as, extractedArguments.get(as)));
+                }
+                ValueNode extracted = ComputeAddressFromSegmentPair.computeAbsolutePointerFromSegmentPair(parameter, originalArguments, originalArgumentIndex, appendToGraph);
+                extractedArguments.put(as, extracted);
                 return List.of();
             }
         }
@@ -289,6 +487,8 @@ public abstract class AbiUtils {
      */
     public abstract NativeEntryPointInfo makeNativeEntrypoint(FunctionDescriptor desc, Linker.Option... options);
 
+    public abstract JavaEntryPointInfo makeJavaEntryPoint(FunctionDescriptor desc, Linker.Option... options);
+
     /**
      * Generate a register allocation for SubstrateVM from the one generated by and for HotSpot.
      */
@@ -299,13 +499,19 @@ public abstract class AbiUtils {
      * used to call said entrypoint.
      */
     @Platforms(Platform.HOSTED_ONLY.class)
-    public final Adapter.AdaptationResult adapt(List<ValueNode> arguments, NativeEntryPointInfo nep) {
-        return Adapter.adapt(this, generateAdaptations(nep), arguments, nep);
+    public final Adapter.Result.FullNativeAdaptation adapt(List<ValueNode> arguments, NativeEntryPointInfo nep) {
+        return Adapter.adaptToNative(this, generateAdaptations(nep), arguments, nep);
+    }
+
+    @Platforms(Platform.HOSTED_ONLY.class)
+    public final Adapter.Result.TypeAdaptation adapt(JavaEntryPointInfo jep) {
+        return Adapter.adaptFromNative(this, generateAdaptations(jep), jep);
     }
 
     /**
      * Generate additional argument adaptations which are not done by HotSpot.
      */
+    @BasedOnJDKFile("https://github.com/openjdk/jdk/blob/jdk-24+27/src/java.base/share/classes/jdk/internal/foreign/abi/CallingSequenceBuilder.java#L103-L147")
     @Platforms(Platform.HOSTED_ONLY.class)
     protected List<Adapter.Adaptation> generateAdaptations(NativeEntryPointInfo nep) {
         List<Adapter.Adaptation> adaptations = new ArrayList<>(Collections.nCopies(nep.methodType().parameterCount(), null));
@@ -314,8 +520,60 @@ public abstract class AbiUtils {
             adaptations.set(current++, Adapter.check(long.class));
         }
         adaptations.set(current++, Adapter.extract(Adapter.Extracted.CallTarget, long.class));
+
+        // Special handling in case Linker.Option.critical(true) is passed.
+        // See the doc of class Adapter.ComputeAddressFromSegmentPair
+        var storages = nep.parametersAssignment();
+
+        /*
+         * It is possible to combine linker options 'captureCallState(...)' and 'critical(true)'.
+         * This means that one can pass a heap memory segment as capture buffer address.
+         */
         if (nep.capturesCallState()) {
-            adaptations.set(current++, Adapter.extract(Adapter.Extracted.CaptureBufferAddress, long.class));
+            if (nep.allowHeapAccess()) {
+                VMError.guarantee(storages[current] != null && storages[current + 1] == null);
+                // consumes two parameters (i.e. object + offset pair)
+                handleCriticalWithHeapAccess(nep, current + 1, adaptations, Adapter.extractSegmentPair(Adapter.Extracted.CaptureBufferAddress, long.class));
+                current += 2;
+            } else {
+                adaptations.set(current, Adapter.extract(Adapter.Extracted.CaptureBufferAddress, long.class));
+                current++;
+            }
+        }
+
+        for (int i = current; i < storages.length; ++i) {
+            var storage = storages[i];
+            if (storage == null) {
+                handleCriticalWithHeapAccess(nep, i, adaptations, Adapter.computeAddressFromSegmentPair());
+            }
+        }
+
+        return adaptations;
+    }
+
+    @BasedOnJDKFile("https://github.com/openjdk/jdk/blob/jdk-24+27/src/java.base/share/classes/jdk/internal/foreign/abi/x64/sysv/CallArranger.java#L280-L290")
+    private static void handleCriticalWithHeapAccess(NativeEntryPointInfo nep, int i, List<Adaptation> adaptations, Adaptation adaptation) {
+        VMError.guarantee(nep.allowHeapAccess(), "A storage may only be null when the Linker.Option.critical(true) option is passed.");
+        VMError.guarantee(
+                        JavaKind.fromJavaClass(nep.methodType().parameterArray()[i]) == JavaKind.Long &&
+                                        JavaKind.fromJavaClass(nep.methodType().parameterArray()[i - 1]) == JavaKind.Object,
+                        """
+                                        Storage is null, but the other parameters are inconsistent.
+                                        Storage may be null only if its kind is Long and previous kind is Object.
+                                        See jdk/internal/foreign/abi/x64/sysv/CallArranger.java:286""");
+        VMError.guarantee(
+                        adaptations.get(i) == null && adaptations.get(i - 1) == null,
+                        "This parameter already has an adaptation when it should not.");
+
+        adaptations.set(i, Adapter.drop());
+        adaptations.set(i - 1, adaptation);
+    }
+
+    @Platforms(Platform.HOSTED_ONLY.class)
+    protected List<Adapter.Adaptation> generateAdaptations(JavaEntryPointInfo jep) {
+        List<Adapter.Adaptation> adaptations = new ArrayList<>(Collections.nCopies(jep.handleType().parameterCount(), null));
+        if (jep.buffersReturn()) {
+            adaptations.set(0, Adapter.drop());
         }
         return adaptations;
     }
@@ -329,6 +587,29 @@ public abstract class AbiUtils {
      */
     @Platforms(Platform.HOSTED_ONLY.class)
     public abstract Map<String, MemoryLayout> canonicalLayouts();
+
+    public record Registers(Register methodHandle, Register isolate) {
+    }
+
+    public abstract Registers upcallSpecialArgumentsRegisters();
+
+    public abstract int trampolineSize();
+
+    record TrampolineTemplate(byte[] assemblyTemplate, int isolateOffset, int methodHandleOffset, int stubOffset) {
+        public Pointer write(Pointer at, Isolate isolate, Word methodHandle, Word stubPointer) {
+            for (int i = 0; i < assemblyTemplate.length; ++i) {
+                at.writeByte(i, assemblyTemplate[i]);
+            }
+            at.writeWord(isolateOffset, isolate);
+            at.writeWord(methodHandleOffset, methodHandle);
+            at.writeWord(stubOffset, stubPointer);
+
+            return at.add(assemblyTemplate.length);
+        }
+    }
+
+    @Platforms(Platform.HOSTED_ONLY.class)
+    public abstract TrampolineTemplate generateTrampolineTemplate();
 }
 
 class ABIs {
@@ -353,6 +634,11 @@ class ABIs {
         }
 
         @Override
+        public JavaEntryPointInfo makeJavaEntryPoint(FunctionDescriptor desc, Linker.Option... options) {
+            return fail();
+        }
+
+        @Override
         public AssignedLocation[] toMemoryAssignment(VMStorage[] moves, boolean forReturn) {
             return fail();
         }
@@ -371,9 +657,28 @@ class ABIs {
         public Map<String, MemoryLayout> canonicalLayouts() {
             return fail();
         }
+
+        @Override
+        public Registers upcallSpecialArgumentsRegisters() {
+            return fail();
+        }
+
+        @Override
+        public int trampolineSize() {
+            return fail();
+        }
+
+        @Override
+        public TrampolineTemplate generateTrampolineTemplate() {
+            return fail();
+        }
     }
 
-    private abstract static class X86_64 extends AbiUtils {
+    @BasedOnJDKClass(X86_64Architecture.class)
+    @BasedOnJDKClass(jdk.internal.foreign.abi.DowncallLinker.class)
+    @BasedOnJDKClass(jdk.internal.foreign.abi.UpcallLinker.class)
+    abstract static class X86_64 extends AbiUtils {
+        @BasedOnJDKClass(jdk.internal.foreign.abi.DowncallLinker.class)
         static class Downcalls {
             protected static Stream<Binding.VMStore> argMoveBindingsStream(CallingSequence callingSequence) {
                 return callingSequence.argumentBindings()
@@ -391,8 +696,25 @@ class ABIs {
                 return retMoveBindingsStream(callingSequence).toArray(Binding.VMLoad[]::new);
             }
 
-            protected static VMStorage[] toStorageArray(Binding.Move[] moves) {
+            static VMStorage[] toStorageArray(Binding.Move[] moves) {
                 return Arrays.stream(moves).map(Binding.Move::storage).toArray(VMStorage[]::new);
+            }
+        }
+
+        @BasedOnJDKClass(jdk.internal.foreign.abi.UpcallLinker.class)
+        static class Upcalls {
+            static Binding.VMLoad[] argMoveBindings(CallingSequence callingSequence) {
+                return callingSequence.argumentBindings()
+                                .filter(Binding.VMLoad.class::isInstance)
+                                .map(Binding.VMLoad.class::cast)
+                                .toArray(Binding.VMLoad[]::new);
+            }
+
+            static Binding.VMStore[] retMoveBindings(CallingSequence callingSequence) {
+                return callingSequence.returnBindings().stream()
+                                .filter(Binding.VMStore.class::isInstance)
+                                .map(Binding.VMStore.class::cast)
+                                .toArray(Binding.VMStore[]::new);
             }
         }
 
@@ -400,34 +722,56 @@ class ABIs {
 
         @Override
         public NativeEntryPointInfo makeNativeEntrypoint(FunctionDescriptor desc, Linker.Option... options) {
-            // Linker.downcallHandle implemented in
-            // AbstractLinker.downcallHandle
-
-            // AbstractLinker.downcallHandle0
+            // From Linker.downcallHandle implemented in AbstractLinker.downcallHandle:
+            // From AbstractLinker.downcallHandle0
             LinkerOptions optionSet = LinkerOptions.forDowncall(desc, options);
             MethodType type = desc.toMethodType();
 
-            /* OS SPECIFIC BEGINS */
-            // AbstractLinker.arrangeDowncall implemented in
-            // SysVx64Linker.arrangeDowncall or Windowsx64Linker.arrangeDowncall
-
-            // CallArranger.arrangeDowncall
+            // OS specific!
+            // From AbstractLinker.arrangeDowncall implemented in SysVx64Linker.arrangeDowncall
+            // or Windowsx64Linker.arrangeDowncall:
+            // From CallArranger.arrangeDowncall
             var callingSequence = makeCallingSequence(type, desc, false, optionSet);
-            /* OS SPECIFIC ENDS */
 
-            // DowncallLinker.getBoundMethodHandle
-            var argMoves = Downcalls.toStorageArray(Downcalls.argMoveBindingsStream(callingSequence).toArray(Binding.VMStore[]::new));
+            // From DowncallLinker.getBoundMethodHandle
+            var argMoveBindings = Downcalls.argMoveBindingsStream(callingSequence).toArray(Binding.VMStore[]::new);
+            var argMoves = Downcalls.toStorageArray(argMoveBindings);
             var returnMoves = Downcalls.toStorageArray(Downcalls.retMoveBindings(callingSequence));
             var boundaryType = callingSequence.calleeMethodType();
             var needsReturnBuffer = callingSequence.needsReturnBuffer();
 
-            // NativeEntrypoint.make
-            return NativeEntryPointInfo.make(argMoves, returnMoves, boundaryType, needsReturnBuffer, callingSequence.capturedStateMask(), callingSequence.needsTransition());
+            // From NativeEntrypoint.make
+            return NativeEntryPointInfo.make(argMoves, returnMoves, boundaryType, needsReturnBuffer, callingSequence.capturedStateMask(), callingSequence.needsTransition(),
+                            optionSet.allowsHeapAccess());
+        }
+
+        @Override
+        public JavaEntryPointInfo makeJavaEntryPoint(FunctionDescriptor desc, Linker.Option... options) {
+            // Linker.upcallStub implemented in
+            // AbstractLinker.upcallStub
+            MethodType type = desc.toMethodType();
+
+            // From CallArranger.arrangeUpcall
+            LinkerOptions optionSet = LinkerOptions.forUpcall(desc, options);
+            var callingSequence = makeCallingSequence(type, desc, true, optionSet);
+
+            // From SharedUtil.arrangeUpcallHelper
+
+            // From UpcallLinker.makeFactory
+            Binding.VMLoad[] argMoves = Upcalls.argMoveBindings(callingSequence);
+            Binding.VMStore[] retMoves = Upcalls.retMoveBindings(callingSequence);
+            VMStorage[] args = Arrays.stream(argMoves).map(Binding.Move::storage).toArray(VMStorage[]::new);
+            VMStorage[] rets = Arrays.stream(retMoves).map(Binding.Move::storage).toArray(VMStorage[]::new);
+            Target_jdk_internal_foreign_abi_UpcallLinker_CallRegs cr = new Target_jdk_internal_foreign_abi_UpcallLinker_CallRegs(args, rets);
+            return JavaEntryPointInfo.make(callingSequence.callerMethodType(), cr, callingSequence.needsReturnBuffer(), callingSequence.returnBufferSize());
         }
 
         @Override
         public AssignedLocation[] toMemoryAssignment(VMStorage[] argMoves, boolean forReturn) {
             for (VMStorage move : argMoves) {
+                if (move == null) {
+                    continue;
+                }
                 switch (move.type()) {
                     case X86_64Architecture.StorageType.X87 ->
                         throw unsupportedFeature("Unsupported register kind: X87");
@@ -444,13 +788,17 @@ class ABIs {
             AssignedLocation[] storages = new AssignedLocation[argMoves.length];
             int i = 0;
             for (VMStorage move : argMoves) {
+                if (move == null) {
+                    storages[i++] = AssignedLocation.placeholder();
+                    continue;
+                }
                 storages[i++] = switch (move.type()) {
                     case X86_64Architecture.StorageType.PLACEHOLDER -> AssignedLocation.placeholder();
                     case X86_64Architecture.StorageType.INTEGER -> {
                         Register reg = AMD64.cpuRegisters[move.indexOrOffset()];
                         assert reg.name.equals(move.debugName());
                         assert reg.getRegisterCategory().equals(AMD64.CPU);
-                        yield AssignedLocation.forRegister(reg);
+                        yield AssignedLocation.forRegister(reg, JavaKind.Long);
                     }
                     case X86_64Architecture.StorageType.VECTOR -> {
                         /*
@@ -460,7 +808,7 @@ class ABIs {
                         Register reg = AMD64.xmmRegistersSSE[move.indexOrOffset()];
                         assert reg.name.equals(move.debugName());
                         assert reg.getRegisterCategory().equals(AMD64.XMM);
-                        yield AssignedLocation.forRegister(reg);
+                        yield AssignedLocation.forRegister(reg, JavaKind.Double);
                     }
                     case X86_64Architecture.StorageType.STACK -> AssignedLocation.forStack(move.indexOrOffset());
                     default -> throw unsupportedFeature("Unhandled VMStorage: " + move);
@@ -500,8 +848,58 @@ class ABIs {
                             Map.entry("jfloat", ValueLayout.JAVA_FLOAT),
                             Map.entry("jdouble", ValueLayout.JAVA_DOUBLE));
         }
+
+        @Override
+        public Registers upcallSpecialArgumentsRegisters() {
+            return new Registers(AMD64.r10, AMD64.r11);
+        }
+
+        @Override
+        public int trampolineSize() {
+            return 128;
+        }
+
+        @Platforms(Platform.HOSTED_ONLY.class)
+        @Override
+        public TrampolineTemplate generateTrampolineTemplate() {
+            // Generate the trampoline
+            AMD64Assembler asm = new AMD64Assembler(ConfigurationValues.getTarget());
+            var odas = new ArrayList<AMD64BaseAssembler.OperandDataAnnotation>(3);
+            // Collect the positions of the address in the movq instructions.
+            asm.setCodePatchingAnnotationConsumer(ca -> {
+                if (ca instanceof AMD64BaseAssembler.OperandDataAnnotation oda) {
+                    odas.add(oda);
+                }
+            });
+
+            Register mhRegister = upcallSpecialArgumentsRegisters().methodHandle();
+            Register isolateRegister = upcallSpecialArgumentsRegisters().isolate();
+
+            /* Store isolate in the assigned register */
+            asm.movq(isolateRegister, 0L, true);
+            /* r10 points in the mh array */
+            asm.movq(mhRegister, 0L, true);
+            /* r10 contains the method handle */
+            asm.movq(mhRegister, new AMD64Address(mhRegister));
+            /* rax contains the stub address */
+            asm.movq(rax, 0L, true);
+            /* executes the stub */
+            asm.jmp(new AMD64Address(rax, 0));
+
+            assert trampolineSize() - asm.position() >= 0;
+            asm.nop(trampolineSize() - asm.position());
+
+            byte[] assembly = asm.close(true);
+            assert assembly.length == trampolineSize();
+            assert odas.size() == 3;
+            assert odas.stream().allMatch(oda -> oda.operandSize == 8);
+
+            return new TrampolineTemplate(assembly, odas.get(0).operandPosition, odas.get(1).operandPosition, odas.get(2).operandPosition);
+        }
     }
 
+    @BasedOnJDKClass(jdk.internal.foreign.abi.x64.sysv.SysVx64Linker.class)
+    @BasedOnJDKClass(jdk.internal.foreign.abi.x64.sysv.CallArranger.class)
     static final class SysV extends X86_64 {
         @Override
         protected CallingSequence makeCallingSequence(MethodType type, FunctionDescriptor desc, boolean forUpcall, LinkerOptions options) {
@@ -515,7 +913,10 @@ class ABIs {
 
             if (assignments.length > 0) {
                 final int last = assignments.length - 1;
-                if (assignments[last].equals(X86_64Architecture.Regs.rax)) {
+                var lastAssignment = assignments[last];
+                // assignments may be null when Linker.Option.critical(true) is used.
+                // See docs from ComputeAddressFromSegmentPair.
+                if (lastAssignment != null && lastAssignment.equals(X86_64Architecture.Regs.rax)) {
                     /*
                      * This branch is only taken when the function is variadic, that is when rax is
                      * passed as an additional pseudo-parameter, where it will contain the number of
@@ -534,15 +935,17 @@ class ABIs {
         @Platforms(Platform.HOSTED_ONLY.class)
         public void checkLibrarySupport() {
             String name = "SystemV (Linux AMD64)";
-            VMError.guarantee(LibC.isSupported(), "Foreign functions feature requires LibC support on " + name);
+            VMError.guarantee(LibC.isSupported(), "Foreign functions feature requires LibC support on %s", name);
         }
 
         @Override
         public Map<String, MemoryLayout> canonicalLayouts() {
             return canonicalLayouts(ValueLayout.JAVA_LONG, ValueLayout.JAVA_LONG, ValueLayout.JAVA_INT);
         }
-    };
+    }
 
+    @BasedOnJDKClass(jdk.internal.foreign.abi.x64.windows.Windowsx64Linker.class)
+    @BasedOnJDKClass(jdk.internal.foreign.abi.x64.windows.CallArranger.class)
     static final class Win64 extends X86_64 {
         @Override
         protected CallingSequence makeCallingSequence(MethodType type, FunctionDescriptor desc, boolean forUpcall, LinkerOptions options) {
@@ -553,7 +956,7 @@ class ABIs {
          * The Win64 ABI allows one mismatch between register and value type: When a variadic
          * floating-point argument is among the first four parameters of the function, the argument
          * should be passed in both the XMM and CPU register.
-         *
+         * <p>
          * This method is slightly cheating: technically, we only ever want to adapt the
          * cpu-register-assigned copy of a "register assigned floating point vararg parameter" from
          * floating-point to long. This method assumes that this case will be the only source
@@ -587,13 +990,13 @@ class ABIs {
         @Platforms(Platform.HOSTED_ONLY.class)
         public void checkLibrarySupport() {
             String name = "Win64 (Windows AMD64)";
-            VMError.guarantee(LibC.isSupported(), "Foreign functions feature requires LibC support on" + name);
-            VMError.guarantee(WindowsAPIs.isSupported(), "Foreign functions feature requires Windows APIs support on" + name);
+            VMError.guarantee(LibC.isSupported(), "Foreign functions feature requires LibC support on %s", name);
+            VMError.guarantee(WindowsAPIs.isSupported(), "Foreign functions feature requires Windows APIs support on %s", name);
         }
 
         @Override
         public Map<String, MemoryLayout> canonicalLayouts() {
             return canonicalLayouts(ValueLayout.JAVA_INT, ValueLayout.JAVA_LONG, ValueLayout.JAVA_CHAR);
         }
-    };
+    }
 }

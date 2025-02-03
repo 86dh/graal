@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2020, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -24,13 +24,13 @@
  */
 package com.oracle.svm.core;
 
-import jdk.graal.compiler.api.replacements.Fold;
 import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.Isolate;
 import org.graalvm.nativeimage.IsolateThread;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
 
+import jdk.graal.compiler.api.replacements.Fold;
 import jdk.vm.ci.code.Register;
 import jdk.vm.ci.code.RegisterValue;
 import jdk.vm.ci.meta.JavaValue;
@@ -47,10 +47,10 @@ public abstract class ReservedRegisters {
     protected final Register heapBaseRegister;
 
     @Platforms(Platform.HOSTED_ONLY.class)
-    protected ReservedRegisters(Register frameRegister, Register threadRegisterCandidate, Register heapBaseRegisterCandidate) {
+    protected ReservedRegisters(Register frameRegister, Register threadRegister, Register heapBaseRegister) {
         this.frameRegister = frameRegister;
-        this.threadRegister = SubstrateOptions.MultiThreaded.getValue() ? threadRegisterCandidate : null;
-        this.heapBaseRegister = SubstrateOptions.SpawnIsolates.getValue() ? heapBaseRegisterCandidate : null;
+        this.threadRegister = threadRegister;
+        this.heapBaseRegister = heapBaseRegister;
     }
 
     /**
@@ -89,5 +89,9 @@ public abstract class ReservedRegisters {
             }
         }
         return false;
+    }
+
+    public boolean isReservedRegister(Register reg) {
+        return reg.equals(this.frameRegister) || reg.equals(this.heapBaseRegister) || reg.equals(this.threadRegister);
     }
 }

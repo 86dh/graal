@@ -156,6 +156,12 @@ public final class LinearScanOptimizeSpillPositionPhase extends LinearScanAlloca
                 return;
             }
 
+            if (!spillBlock.canUseBlockAsSpillTarget()) {
+                debug.log(DebugContext.VERBOSE_LEVEL, "Spilling to block %s is disabled", spillBlock);
+                interval.setSpillState(SpillState.StoreAtDefinition);
+                return;
+            }
+
             LIRInsertionBuffer insertionBuffer = insertionBuffers[spillBlock.getId()];
             if (insertionBuffer == null) {
                 insertionBuffer = new LIRInsertionBuffer();
@@ -167,11 +173,11 @@ public final class LinearScanOptimizeSpillPositionPhase extends LinearScanAlloca
             AllocatableValue fromLocation = interval.getSplitChildAtOpId(spillOpId, LIRInstruction.OperandMode.DEF, allocator).location();
             AllocatableValue toLocation = LinearScan.canonicalSpillOpr(interval);
             LIRInstruction move = allocator.getSpillMoveFactory().createMove(toLocation, fromLocation);
-            move.setComment(res, "LSRAOptimizeSpillPos: optimize spill pos");
+            move.setComment(res, String.format("LSRAOptimizeSpillPos: optimize spill pos from block %s to %s", defBlock, spillBlock));
             debug.log(DebugContext.VERBOSE_LEVEL, "Insert spill move %s", move);
             move.setId(LinearScan.DOMINATOR_SPILL_MOVE_ID);
 
-            int insertionIndex = res.getFirstInsertPosition(spillBlock);
+            int insertionIndex = res.getFirstInsertPosition();
             insertionBuffer.append(insertionIndex, move);
 
             betterSpillPosWithLowerProbability.increment(debug);

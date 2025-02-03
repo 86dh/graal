@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, 2017, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2015, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -34,23 +34,30 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.Date;
+import java.util.EnumSet;
 import java.util.Enumeration;
 import java.util.List;
 import java.util.Objects;
 import java.util.Set;
+import java.util.function.BiConsumer;
 import java.util.stream.Collectors;
 import java.util.stream.StreamSupport;
 
 import org.graalvm.collections.EconomicMap;
 import org.graalvm.collections.MapCursor;
-import org.graalvm.collections.Pair;
+import org.graalvm.nativeimage.ImageInfo;
 import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
+import org.graalvm.nativeimage.impl.ConfigurationCondition;
 
 import com.oracle.svm.core.BuildPhaseProvider;
+import com.oracle.svm.core.ClassLoaderSupport.ConditionWithOrigin;
 import com.oracle.svm.core.MissingRegistrationUtils;
 import com.oracle.svm.core.SubstrateOptions;
+import com.oracle.svm.core.SubstrateUtil;
+import com.oracle.svm.core.configure.ConditionalRuntimeValue;
+import com.oracle.svm.core.configure.RuntimeConditionSet;
 import com.oracle.svm.core.feature.AutomaticallyRegisteredFeature;
 import com.oracle.svm.core.feature.InternalFeature;
 import com.oracle.svm.core.jdk.resources.MissingResourceRegistrationError;
@@ -60,6 +67,13 @@ import com.oracle.svm.core.jdk.resources.ResourceExceptionEntry;
 import com.oracle.svm.core.jdk.resources.ResourceStorageEntry;
 import com.oracle.svm.core.jdk.resources.ResourceStorageEntryBase;
 import com.oracle.svm.core.jdk.resources.ResourceURLConnection;
+import com.oracle.svm.core.jdk.resources.CompressedGlobTrie.CompressedGlobTrie;
+import com.oracle.svm.core.jdk.resources.CompressedGlobTrie.GlobTrieNode;
+import com.oracle.svm.core.jdk.resources.CompressedGlobTrie.GlobUtils;
+import com.oracle.svm.core.layeredimagesingleton.LayeredImageSingletonBuilderFlags;
+import com.oracle.svm.core.layeredimagesingleton.LayeredImageSingletonSupport;
+import com.oracle.svm.core.layeredimagesingleton.MultiLayeredImageSingleton;
+import com.oracle.svm.core.layeredimagesingleton.UnsavedSingleton;
 import com.oracle.svm.core.util.ImageHeapMap;
 import com.oracle.svm.core.util.VMError;
 import com.oracle.svm.util.LogUtils;
@@ -71,24 +85,44 @@ import com.oracle.svm.util.LogUtils;
  * Registered resources are then available from DynamicHub#getResource classes and
  * {@link Target_java_lang_ClassLoader class loaders}.
  */
-public final class Resources {
+public final class Resources implements MultiLayeredImageSingleton, UnsavedSingleton {
 
     private static final int INVALID_TIMESTAMP = -1;
     public static final char RESOURCES_INTERNAL_PATH_SEPARATOR = '/';
 
-    public static Resources singleton() {
-        return ImageSingletons.lookup(Resources.class);
+    /**
+     * @return the singleton corresponding to this layer's resources in a layered build, the unique
+     *         singleton otherwise
+     */
+    @Platforms(Platform.HOSTED_ONLY.class)
+    public static Resources currentLayer() {
+        return LayeredImageSingletonSupport.singleton().lookup(Resources.class, false, true);
     }
 
     /**
-     * The hosted map used to collect registered resources. Using a {@link Pair} of (module,
-     * resourceName) provides implementations for {@code hashCode()} and {@code equals()} needed for
-     * the map keys. Hosted module instances differ to runtime instances, so the map that ends up in
-     * the image heap is computed after the runtime module instances have been computed {see
-     * com.oracle.svm.hosted.ModuleLayerFeature}.
+     * @return an array of singletons corresponding to all layers in a layered build, or an array
+     *         with a single element otherwise
      */
-    private final EconomicMap<Pair<Module, String>, ResourceStorageEntryBase> resources = ImageHeapMap.create();
-    private final EconomicMap<Pair<String, String>, Boolean> includePatterns = ImageHeapMap.create();
+    public static Resources[] layeredSingletons() {
+        assert !SubstrateUtil.HOSTED : "Accessing all layers resources at build time";
+        return MultiLayeredImageSingleton.getAllLayers(Resources.class);
+    }
+
+    /**
+     * The hosted map used to collect registered resources. Using a {@link ModuleResourceKey} of
+     * (module, resourceName) provides implementations for {@code hashCode()} and {@code equals()}
+     * needed for the map keys. Hosted module instances differ to runtime instances, so the map that
+     * ends up in the image heap is computed after the runtime module instances have been computed
+     * {see com.oracle.svm.hosted.ModuleLayerFeature}.
+     */
+    private final EconomicMap<ModuleResourceKey, ConditionalRuntimeValue<ResourceStorageEntryBase>> resources = ImageHeapMap.create();
+    private final EconomicMap<RequestedPattern, RuntimeConditionSet> requestedPatterns = ImageHeapMap.create();
+
+    public record RequestedPattern(String module, String resource) {
+    }
+
+    public record ModuleResourceKey(Module module, String resource) {
+    }
 
     /**
      * The object used to mark a resource as reachable according to the metadata. It can be obtained
@@ -99,9 +133,9 @@ public final class Resources {
 
     /**
      * The object used to detect that the resource is not reachable according to the metadata. It
-     * can be returned by the {@link Resources#get} method if the resource was not correctly
-     * specified in the configuration, but we do not want to throw directly (for example when we try
-     * to check all the modules for a resource).
+     * can be returned by the {@link Resources#getAtRuntime} method if the resource was not
+     * correctly specified in the configuration, but we do not want to throw directly (for example
+     * when we try to check all the modules for a resource).
      */
     private static final ResourceStorageEntryBase MISSING_METADATA_MARKER = new ResourceStorageEntryBase();
 
@@ -112,37 +146,65 @@ public final class Resources {
      */
     private long lastModifiedTime = INVALID_TIMESTAMP;
 
+    private GlobTrieNode<ConditionWithOrigin> resourcesTrieRoot;
+
     Resources() {
     }
 
-    public EconomicMap<Pair<Module, String>, ResourceStorageEntryBase> getResourceStorage() {
-        return resources;
+    public GlobTrieNode<ConditionWithOrigin> getResourcesTrieRoot() {
+        return resourcesTrieRoot;
     }
 
-    public Iterable<ResourceStorageEntryBase> resources() {
+    @Platforms(Platform.HOSTED_ONLY.class)
+    public void setResourcesTrieRoot(GlobTrieNode<ConditionWithOrigin> resourcesTrieRoot) {
+        this.resourcesTrieRoot = resourcesTrieRoot;
+    }
+
+    public void forEachResource(BiConsumer<ModuleResourceKey, ConditionalRuntimeValue<ResourceStorageEntryBase>> action) {
+        MapCursor<ModuleResourceKey, ConditionalRuntimeValue<ResourceStorageEntryBase>> entries = resources.getEntries();
+        while (entries.advance()) {
+            action.accept(entries.getKey(), entries.getValue());
+        }
+    }
+
+    @Platforms(Platform.HOSTED_ONLY.class)
+    public ConditionalRuntimeValue<ResourceStorageEntryBase> getResource(ModuleResourceKey storageKey) {
+        return resources.get(storageKey);
+    }
+
+    @Platforms(Platform.HOSTED_ONLY.class)
+    public Iterable<ConditionalRuntimeValue<ResourceStorageEntryBase>> resources() {
         return resources.getValues();
     }
 
+    @Platforms(Platform.HOSTED_ONLY.class)
     public int count() {
         return resources.size();
     }
 
-    public long getLastModifiedTime() {
-        return lastModifiedTime;
+    public static long getLastModifiedTime() {
+        var singletons = layeredSingletons();
+        return singletons[singletons.length - 1].lastModifiedTime;
     }
 
     public static String moduleName(Module module) {
         return module == null ? null : module.getName();
     }
 
-    private static Pair<Module, String> createStorageKey(Module module, String resourceName) {
+    public static ModuleResourceKey createStorageKey(Module module, String resourceName) {
         Module m = module != null && module.isNamed() ? module : null;
-        return Pair.create(m, resourceName);
+        if (ImageInfo.inImageBuildtimeCode()) {
+            if (m != null) {
+                m = RuntimeModuleSupport.instance().getRuntimeModuleForHostedModule(m);
+            }
+        }
+        return new ModuleResourceKey(m, resourceName);
     }
 
+    @Platforms(Platform.HOSTED_ONLY.class)
     public static Set<String> getIncludedResourcesModules() {
-        return StreamSupport.stream(singleton().resources.getKeys().spliterator(), false)
-                        .map(Pair::getLeft)
+        return StreamSupport.stream(currentLayer().resources.getKeys().spliterator(), false)
+                        .map(ModuleResourceKey::module)
                         .filter(Objects::nonNull)
                         .map(Module::getName)
                         .collect(Collectors.toSet());
@@ -166,38 +228,35 @@ public final class Resources {
     private void addEntry(Module module, String resourceName, boolean isDirectory, byte[] data, boolean fromJar, boolean isNegativeQuery) {
         VMError.guarantee(!BuildPhaseProvider.isAnalysisFinished(), "Trying to add a resource entry after analysis.");
         Module m = module != null && module.isNamed() ? module : null;
-        if (m != null) {
-            m = RuntimeModuleSupport.instance().getRuntimeModuleForHostedModule(m);
-        }
         synchronized (resources) {
-            Pair<Module, String> key = createStorageKey(m, resourceName);
-            ResourceStorageEntryBase entry = resources.get(key);
+            ModuleResourceKey key = createStorageKey(m, resourceName);
+            RuntimeConditionSet conditionSet = RuntimeConditionSet.emptySet();
+            ConditionalRuntimeValue<ResourceStorageEntryBase> entry = resources.get(key);
             if (isNegativeQuery) {
                 if (entry == null) {
-                    resources.put(key, NEGATIVE_QUERY_MARKER);
+                    resources.put(key, new ConditionalRuntimeValue<>(conditionSet, NEGATIVE_QUERY_MARKER));
                 }
                 return;
             }
 
-            if (entry == null || entry == NEGATIVE_QUERY_MARKER) {
+            if (entry == null || entry.getValueUnconditionally() == NEGATIVE_QUERY_MARKER) {
                 updateTimeStamp();
-                entry = new ResourceStorageEntry(isDirectory, fromJar);
+                entry = new ConditionalRuntimeValue<>(conditionSet, new ResourceStorageEntry(isDirectory, fromJar));
                 resources.put(key, entry);
             } else {
-                if (key.getLeft() != null) {
+                if (key.module() != null) {
                     // if the entry already exists, and it comes from a module, it is the same entry
                     // that we registered at some point before
                     return;
                 }
             }
-
-            entry.getData().add(data);
+            entry.getValueUnconditionally().addData(data);
         }
     }
 
     @Platforms(Platform.HOSTED_ONLY.class)
     public static void registerResource(String resourceName, InputStream is) {
-        singleton().registerResource(null, resourceName, is, true);
+        currentLayer().registerResource(null, resourceName, is, true);
     }
 
     @Platforms(Platform.HOSTED_ONLY.class)
@@ -229,10 +288,10 @@ public final class Resources {
                 LogUtils.warning("Resource " + resourceName + " from module " + moduleName(module) + " produced the following IOException: " + e.getClass().getTypeName() + ": " + e.getMessage());
             }
         }
-        Pair<Module, String> key = createStorageKey(module, resourceName);
+        ModuleResourceKey key = createStorageKey(module, resourceName);
         synchronized (resources) {
             updateTimeStamp();
-            resources.put(key, new ResourceExceptionEntry(e));
+            resources.put(key, new ConditionalRuntimeValue<>(RuntimeConditionSet.emptySet(), new ResourceExceptionEntry(e)));
         }
     }
 
@@ -247,16 +306,11 @@ public final class Resources {
     }
 
     @Platforms(Platform.HOSTED_ONLY.class)
-    public void registerIncludePattern(String pattern) {
-        registerIncludePattern(null, pattern);
-    }
-
-    @Platforms(Platform.HOSTED_ONLY.class)
-    public void registerIncludePattern(String module, String pattern) {
+    public void registerIncludePattern(ConfigurationCondition condition, String module, String pattern) {
         assert MissingRegistrationUtils.throwMissingRegistrationErrors();
-        synchronized (includePatterns) {
+        synchronized (requestedPatterns) {
             updateTimeStamp();
-            includePatterns.put(Pair.create(module, handleEscapedCharacters(pattern)), Boolean.TRUE);
+            requestedPatterns.put(new RequestedPattern(module, handleEscapedCharacters(pattern)), RuntimeConditionSet.createHosted(condition));
         }
     }
 
@@ -299,8 +353,8 @@ public final class Resources {
         return resourceName.equals(canonicalResourceName) || removeTrailingSlash(resourceName).equals(canonicalResourceName);
     }
 
-    public ResourceStorageEntryBase get(String name, boolean throwOnMissing) {
-        return get(null, name, throwOnMissing);
+    public static ResourceStorageEntryBase getAtRuntime(String name, boolean throwOnMissing) {
+        return getAtRuntime(null, name, throwOnMissing);
     }
 
     /**
@@ -309,46 +363,75 @@ public final class Resources {
      * {@link MissingResourceRegistrationError}. This is needed because different modules can be
      * tried on the same resource name, causing an unexpected exception if we throw directly.
      */
-    public ResourceStorageEntryBase get(Module module, String resourceName, boolean throwOnMissing) {
+    public static ResourceStorageEntryBase getAtRuntime(Module module, String resourceName, boolean throwOnMissing) {
+        VMError.guarantee(ImageInfo.inImageRuntimeCode(), "This function should be used only at runtime.");
         String canonicalResourceName = toCanonicalForm(resourceName);
         String moduleName = moduleName(module);
-        ResourceStorageEntryBase entry = resources.get(createStorageKey(module, canonicalResourceName));
+        ConditionalRuntimeValue<ResourceStorageEntryBase> entry = getEntry(module, canonicalResourceName);
         if (entry == null) {
             if (MissingRegistrationUtils.throwMissingRegistrationErrors()) {
-                MapCursor<Pair<String, String>, Boolean> cursor = includePatterns.getEntries();
-                while (cursor.advance()) {
-                    Pair<String, String> moduleResourcePair = cursor.getKey();
-                    if (Objects.equals(moduleName, moduleResourcePair.getLeft()) &&
-                                    (matchResource(moduleResourcePair.getRight(), resourceName) || matchResource(moduleResourcePair.getRight(), canonicalResourceName))) {
+                for (var r : layeredSingletons()) {
+                    MapCursor<RequestedPattern, RuntimeConditionSet> cursor = r.requestedPatterns.getEntries();
+                    while (cursor.advance()) {
+                        RequestedPattern moduleResourcePair = cursor.getKey();
+                        if (Objects.equals(moduleName, moduleResourcePair.module) &&
+                                        ((matchResource(moduleResourcePair.resource, resourceName) || matchResource(moduleResourcePair.resource, canonicalResourceName)) &&
+                                                        cursor.getValue().satisfied())) {
+                            return null;
+                        }
+                    }
+
+                    String glob = GlobUtils.transformToTriePath(resourceName, moduleName);
+                    String canonicalGlob = GlobUtils.transformToTriePath(canonicalResourceName, moduleName);
+                    GlobTrieNode<ConditionWithOrigin> globsTrie = r.getResourcesTrieRoot();
+                    if (CompressedGlobTrie.match(globsTrie, glob) ||
+                                    CompressedGlobTrie.match(globsTrie, canonicalGlob)) {
                         return null;
                     }
                 }
+
                 return missingMetadata(resourceName, throwOnMissing);
             } else {
                 return null;
             }
         }
-        if (entry.isException()) {
-            throw new RuntimeException(entry.getException());
+        if (!entry.getConditions().satisfied()) {
+            return missingMetadata(resourceName, throwOnMissing);
         }
-        if (entry == NEGATIVE_QUERY_MARKER) {
+
+        ResourceStorageEntryBase unconditionalEntry = entry.getValue();
+        assert unconditionalEntry != null : "Already checked above that the condition is satisfied";
+        if (unconditionalEntry.isException()) {
+            throw new RuntimeException(unconditionalEntry.getException());
+        }
+        if (unconditionalEntry == NEGATIVE_QUERY_MARKER) {
             return null;
         }
-        if (entry.isFromJar() && !wasAlreadyInCanonicalForm(resourceName, canonicalResourceName)) {
+        if (unconditionalEntry.isFromJar() && !wasAlreadyInCanonicalForm(resourceName, canonicalResourceName)) {
             /*
              * The resource originally came from a jar file, thus behave like ZipFileSystem behaves
              * for non-canonical paths.
              */
             return null;
         }
-        if (!entry.isDirectory() && hasTrailingSlash(resourceName)) {
+        if (!unconditionalEntry.isDirectory() && hasTrailingSlash(resourceName)) {
             /*
              * If this is an actual resource file (not a directory) we do not tolerate a trailing
              * slash.
              */
             return null;
         }
-        return entry;
+        return unconditionalEntry;
+    }
+
+    private static ConditionalRuntimeValue<ResourceStorageEntryBase> getEntry(Module module, String canonicalResourceName) {
+        for (var r : layeredSingletons()) {
+            ConditionalRuntimeValue<ResourceStorageEntryBase> entry = r.resources.get(createStorageKey(module, canonicalResourceName));
+            if (entry != null) {
+                return entry;
+            }
+        }
+        return null;
     }
 
     private static ResourceStorageEntryBase missingMetadata(String resourceName, boolean throwOnMissing) {
@@ -369,11 +452,11 @@ public final class Resources {
         }
     }
 
-    public URL createURL(String resourceName) {
+    public static URL createURL(String resourceName) {
         return createURL(null, resourceName);
     }
 
-    public URL createURL(Module module, String resourceName) {
+    public static URL createURL(Module module, String resourceName) {
         if (resourceName == null) {
             return null;
         }
@@ -382,17 +465,17 @@ public final class Resources {
         return urls.hasMoreElements() ? urls.nextElement() : null;
     }
 
-    public InputStream createInputStream(String resourceName) {
+    public static InputStream createInputStream(String resourceName) {
         return createInputStream(null, resourceName);
     }
 
     /* Avoid pulling in the URL class when only an InputStream is needed. */
-    public InputStream createInputStream(Module module, String resourceName) {
+    public static InputStream createInputStream(Module module, String resourceName) {
         if (resourceName == null) {
             return null;
         }
 
-        ResourceStorageEntryBase entry = get(module, resourceName, false);
+        ResourceStorageEntryBase entry = getAtRuntime(module, resourceName, false);
         boolean isInMetadata = entry != MISSING_METADATA_MARKER;
         if (moduleName(module) == null && (entry == MISSING_METADATA_MARKER || entry == null)) {
             /*
@@ -400,7 +483,7 @@ public final class Resources {
              * classpath-resource we have to search for the resource in all modules in the image.
              */
             for (Module m : RuntimeModuleSupport.instance().getBootLayer().modules()) {
-                entry = get(m, resourceName, false);
+                entry = getAtRuntime(m, resourceName, false);
                 if (entry != MISSING_METADATA_MARKER) {
                     isInMetadata = true;
                 }
@@ -420,11 +503,11 @@ public final class Resources {
         return data.isEmpty() ? null : new ByteArrayInputStream(data.get(0));
     }
 
-    public Enumeration<URL> createURLs(String resourceName) {
+    public static Enumeration<URL> createURLs(String resourceName) {
         return createURLs(null, resourceName);
     }
 
-    public Enumeration<URL> createURLs(Module module, String resourceName) {
+    public static Enumeration<URL> createURLs(Module module, String resourceName) {
         if (resourceName == null) {
             return null;
         }
@@ -438,7 +521,7 @@ public final class Resources {
         /* If moduleName was unspecified we have to consider all modules in the image */
         if (moduleName(module) == null) {
             for (Module m : RuntimeModuleSupport.instance().getBootLayer().modules()) {
-                ResourceStorageEntryBase entry = get(m, resourceName, false);
+                ResourceStorageEntryBase entry = getAtRuntime(m, resourceName, false);
                 if (entry == MISSING_METADATA_MARKER) {
                     continue;
                 }
@@ -446,7 +529,7 @@ public final class Resources {
                 addURLEntries(resourcesURLs, (ResourceStorageEntry) entry, m, shouldAppendTrailingSlash ? canonicalResourceName + '/' : canonicalResourceName);
             }
         }
-        ResourceStorageEntryBase explicitEntry = get(module, resourceName, false);
+        ResourceStorageEntryBase explicitEntry = getAtRuntime(module, resourceName, false);
         if (explicitEntry != MISSING_METADATA_MARKER) {
             missingMetadata = false;
             addURLEntries(resourcesURLs, (ResourceStorageEntry) explicitEntry, module, shouldAppendTrailingSlash ? canonicalResourceName + '/' : canonicalResourceName);
@@ -503,6 +586,11 @@ public final class Resources {
 
         return resource.startsWith(start) && resource.endsWith(end);
     }
+
+    @Override
+    public EnumSet<LayeredImageSingletonBuilderFlags> getImageBuilderFlags() {
+        return LayeredImageSingletonBuilderFlags.ALL_ACCESS;
+    }
 }
 
 @AutomaticallyRegisteredFeature
@@ -520,9 +608,10 @@ final class ResourcesFeature implements InternalFeature {
          * of lazily initialized fields. Only the byte[] arrays themselves can be safely made
          * read-only.
          */
-        for (ResourceStorageEntryBase entry : Resources.singleton().resources()) {
-            if (entry.hasData()) {
-                for (byte[] resource : entry.getData()) {
+        for (ConditionalRuntimeValue<ResourceStorageEntryBase> entry : Resources.currentLayer().resources()) {
+            var unconditionalEntry = entry.getValueUnconditionally();
+            if (unconditionalEntry.hasData()) {
+                for (byte[] resource : unconditionalEntry.getData()) {
                     access.registerAsImmutable(resource);
                 }
             }

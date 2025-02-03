@@ -51,16 +51,15 @@ import jdk.graal.compiler.debug.GraalError;
 import jdk.graal.compiler.lir.LIRInstructionClass;
 import jdk.graal.compiler.lir.SyncPort;
 import jdk.graal.compiler.lir.asm.CompilationResultBuilder;
-
 import jdk.vm.ci.amd64.AMD64Kind;
 import jdk.vm.ci.code.Register;
 import jdk.vm.ci.meta.Value;
 
 // @formatter:off
-@SyncPort(from = "https://github.com/openjdk/jdk/blob/0a3a925ad88921d387aa851157f54ac0054d347b/src/hotspot/cpu/x86/stubGenerator_x86_64.cpp#L2948-L3009",
-          sha1 = "a4f29fea55385633aac2f71f50d57f9b378516d9")
-@SyncPort(from = "https://github.com/openjdk/jdk/blob/0a3a925ad88921d387aa851157f54ac0054d347b/src/hotspot/cpu/x86/macroAssembler_x86.cpp#L6245-L6702",
-          sha1 = "6aac8a818c14df53d6201ac3df0bc35d3aaac9e4")
+@SyncPort(from = "https://github.com/openjdk/jdk/blob/79345bbbae2564f9f523859d1227a1784293b20f/src/hotspot/cpu/x86/stubGenerator_x86_64.cpp#L3038-L3093",
+          sha1 = "2bf2eb0a9feca080f99e6932d3750cdf3ce2ef3a")
+@SyncPort(from = "https://github.com/openjdk/jdk/blob/496641955041c5e48359e6256a4a61812653d900/src/hotspot/cpu/x86/macroAssembler_x86.cpp#L7035-L7492",
+          sha1 = "0763af542cf9f40a1c542e4834a67fc4b2c74e1c")
 // @formatter:on
 public final class AMD64BigIntegerMultiplyToLenOp extends AMD64LIRInstruction {
 
@@ -597,5 +596,10 @@ public final class AMD64BigIntegerMultiplyToLenOp extends AMD64LIRInstruction {
         masm.jmp(labelThirdLoopPrologue);
 
         masm.bind(labelDone);
+    }
+
+    @Override
+    public boolean modifiesStackPointer() {
+        return true;
     }
 }

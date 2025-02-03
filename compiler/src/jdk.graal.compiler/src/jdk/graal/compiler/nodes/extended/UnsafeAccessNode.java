@@ -27,9 +27,10 @@ package jdk.graal.compiler.nodes.extended;
 import static jdk.graal.compiler.nodeinfo.NodeCycles.CYCLES_2;
 import static jdk.graal.compiler.nodeinfo.NodeSize.SIZE_1;
 
-import java.nio.ByteOrder;
+import org.graalvm.word.LocationIdentity;
 
 import jdk.graal.compiler.core.common.memory.MemoryOrderMode;
+import jdk.graal.compiler.core.common.spi.MetaAccessExtensionProvider;
 import jdk.graal.compiler.core.common.type.Stamp;
 import jdk.graal.compiler.graph.Node;
 import jdk.graal.compiler.graph.NodeClass;
@@ -42,17 +43,15 @@ import jdk.graal.compiler.nodes.memory.MemoryAccess;
 import jdk.graal.compiler.nodes.memory.OrderedMemoryAccess;
 import jdk.graal.compiler.nodes.spi.Canonicalizable;
 import jdk.graal.compiler.nodes.spi.CanonicalizerTool;
+import jdk.graal.compiler.nodes.spi.TrackedUnsafeAccess;
 import jdk.graal.compiler.nodes.type.StampTool;
-import org.graalvm.word.LocationIdentity;
-
-import jdk.vm.ci.meta.ConstantReflectionProvider;
 import jdk.vm.ci.meta.JavaConstant;
 import jdk.vm.ci.meta.JavaKind;
 import jdk.vm.ci.meta.ResolvedJavaField;
 import jdk.vm.ci.meta.ResolvedJavaType;
 
 @NodeInfo(cycles = CYCLES_2, size = SIZE_1)
-public abstract class UnsafeAccessNode extends FixedWithNextNode implements Canonicalizable, OrderedMemoryAccess, MemoryAccess {
+public abstract class UnsafeAccessNode extends FixedWithNextNode implements Canonicalizable, OrderedMemoryAccess, MemoryAccess, TrackedUnsafeAccess {
 
     public static final NodeClass<UnsafeAccessNode> TYPE = NodeClass.create(UnsafeAccessNode.class);
     @Input ValueNode object;
@@ -112,29 +111,31 @@ public abstract class UnsafeAccessNode extends FixedWithNextNode implements Cano
     @Override
     public Node canonical(CanonicalizerTool tool) {
         if (isCanonicalizable()) {
-            if (offset().isConstant()) {
-                long constantOffset = offset().asJavaConstant().asLong();
-
-                // Try to canonicalize to a field access.
-                ResolvedJavaType receiverType = StampTool.typeOrNull(object());
-                if (receiverType != null) {
-                    ResolvedJavaField field = getStaticFieldUnsafeAccess(tool.getConstantReflection());
+            // Try to canonicalize to a field access.
+            ResolvedJavaType receiverType = StampTool.typeOrNull(object(), tool.getMetaAccess());
+            if (receiverType != null) {
+                ResolvedJavaField field = null;
+                if (offset().isJavaConstant()) {
+                    field = getStaticFieldUnsafeAccess(tool.getMetaAccessExtensionProvider());
                     if (field == null) {
+                        long constantOffset = offset().asJavaConstant().asLong();
                         field = receiverType.findInstanceFieldWithOffset(constantOffset, accessKind());
                     }
+                } else if (offset() instanceof FieldOffsetProvider fieldOffsetProvider) {
+                    field = fieldOffsetProvider.getField();
+                }
 
-                    // No need for checking that the receiver is non-null. The field access
-                    // includes the null check and if a field is found, the offset is so small that
-                    // this is never a valid access of an arbitrary address.
-                    if ((field != null && field.getJavaKind() == this.accessKind() &&
-                                    !field.isInternal() /* Ensure this is a true java field. */)) {
-                        return cloneAsFieldAccess(field);
-                    }
+                // No need for checking that the receiver is non-null. The field access
+                // includes the null check and if a field is found, the offset is so small that
+                // this is never a valid access of an arbitrary address.
+                if ((field != null && field.getJavaKind() == this.accessKind() &&
+                                !field.isInternal() /* Ensure this is a true java field. */)) {
+                    return cloneAsFieldAccess(field);
                 }
             }
+
             if (getLocationIdentity().isAny()) {
                 // If we have a vague one, try to build a better location identity.
-                ResolvedJavaType receiverType = StampTool.typeOrNull(object());
                 if (receiverType != null && receiverType.isArray()) {
                     /*
                      * This code might assign a wrong location identity in case the offset is
@@ -161,7 +162,7 @@ public abstract class UnsafeAccessNode extends FixedWithNextNode implements Cano
      *
      * @return the static field, if any, that this node is reading
      */
-    private ResolvedJavaField getStaticFieldUnsafeAccess(ConstantReflectionProvider constantReflection) {
+    private ResolvedJavaField getStaticFieldUnsafeAccess(MetaAccessExtensionProvider metaAccessExtension) {
         if (!object().isJavaConstant() || !offset().isJavaConstant() ||
                         object().isNullConstant() || offset().isNullConstant()) {
             return null;
@@ -169,42 +170,6 @@ public abstract class UnsafeAccessNode extends FixedWithNextNode implements Cano
         JavaConstant objectConstant = object().asJavaConstant();
         JavaConstant offsetConstant = offset().asJavaConstant();
         assert objectConstant != null && offsetConstant != null : "Verified by the check at the beginning.";
-        ResolvedJavaType staticReceiverType = constantReflection.asJavaType(objectConstant);
-        if (staticReceiverType == null) {
-            // object is not of type Class so it is not a static field
-            return null;
-        }
-        return findStaticFieldWithOffset(staticReceiverType, offsetConstant.asLong(), accessKind);
+        return metaAccessExtension.getStaticFieldForAccess(objectConstant, offsetConstant.asLong(), accessKind);
     }
-
-    public static ResolvedJavaField findStaticFieldWithOffset(ResolvedJavaType type, long offset, JavaKind expectedEntryKind) {
-        try {
-            ResolvedJavaField[] declaredFields = type.getStaticFields();
-            return findFieldWithOffset(offset, expectedEntryKind, declaredFields);
-        } catch (UnsupportedOperationException e) {
-            return null;
-        }
-    }
-
-    /**
-     * NOTE GR-18873: this is a copy-paste implementation derived from
-     * {@code jdk.vm.ci.hotspot.HotSpotResolvedObjectTypeImpl#findStaticFieldWithOffset}.
-     */
-    private static ResolvedJavaField findFieldWithOffset(long offset, JavaKind expectedEntryKind, ResolvedJavaField[] declaredFields) {
-        for (ResolvedJavaField field : declaredFields) {
-            long resolvedFieldOffset = field.getOffset();
-            if (ByteOrder.nativeOrder() == ByteOrder.BIG_ENDIAN &&
-                            expectedEntryKind.isPrimitive() &&
-                            !expectedEntryKind.equals(JavaKind.Void) &&
-                            field.getJavaKind().isPrimitive()) {
-                resolvedFieldOffset += field.getJavaKind().getByteCount() -
-                                Math.min(field.getJavaKind().getByteCount(), 4 + expectedEntryKind.getByteCount());
-            }
-            if (resolvedFieldOffset == offset) {
-                return field;
-            }
-        }
-        return null;
-    }
-
 }

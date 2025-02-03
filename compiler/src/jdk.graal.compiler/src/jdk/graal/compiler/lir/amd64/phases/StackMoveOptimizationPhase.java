@@ -31,29 +31,30 @@ import java.util.List;
 import jdk.graal.compiler.core.common.cfg.BasicBlock;
 import jdk.graal.compiler.debug.CounterKey;
 import jdk.graal.compiler.debug.DebugContext;
+import jdk.graal.compiler.debug.GraalError;
 import jdk.graal.compiler.lir.LIR;
 import jdk.graal.compiler.lir.LIRInstruction;
 import jdk.graal.compiler.lir.RedundantMoveElimination;
 import jdk.graal.compiler.lir.amd64.AMD64Move;
+import jdk.graal.compiler.lir.amd64.AMD64Move.AMD64MultiStackMove;
+import jdk.graal.compiler.lir.amd64.AMD64Move.AMD64StackMove;
 import jdk.graal.compiler.lir.gen.LIRGenerationResult;
 import jdk.graal.compiler.lir.phases.LIRPhase;
 import jdk.graal.compiler.lir.phases.PostAllocationOptimizationPhase;
 import jdk.graal.compiler.options.NestedBooleanOptionKey;
 import jdk.graal.compiler.options.Option;
 import jdk.graal.compiler.options.OptionType;
-
 import jdk.vm.ci.code.Register;
 import jdk.vm.ci.code.TargetDescription;
 import jdk.vm.ci.meta.AllocatableValue;
 import jdk.vm.ci.meta.Value;
 
 /**
- * Replaces sequential {@link AMD64Move.AMD64StackMove}s of the same type with a single
- * {@link AMD64Move.AMD64MultiStackMove} to avoid storing/restoring the scratch register multiple
- * times.
+ * Replaces sequential {@link AMD64StackMove}s of the same type with a single
+ * {@link AMD64MultiStackMove} to avoid storing/restoring the scratch register multiple times.
  *
  * Note: this phase must be inserted <b>after</b> {@link RedundantMoveElimination} phase because
- * {@link AMD64Move.AMD64MultiStackMove} are not probably detected.
+ * {@link AMD64MultiStackMove} are not probably detected.
  */
 public class StackMoveOptimizationPhase extends PostAllocationOptimizationPhase {
     public static class Options {
@@ -75,13 +76,14 @@ public class StackMoveOptimizationPhase extends PostAllocationOptimizationPhase 
         }
     }
 
-    private static class Closure {
+    private static final class Closure {
         private static final int NONE = -1;
 
         private int begin = NONE;
         private Register reg = null;
         private List<AllocatableValue> dst;
         private List<Value> src;
+        private List<Value> tmp;
         private AllocatableValue slot;
         private boolean removed = false;
 
@@ -99,13 +101,21 @@ public class StackMoveOptimizationPhase extends PostAllocationOptimizationPhase 
 
                     // lazy initialize
                     if (dst == null) {
-                        assert src == null;
+                        GraalError.guarantee(src == null && tmp == null, "dst, src, tmp should be initialized simultaneously.");
                         dst = new ArrayList<>();
                         src = new ArrayList<>();
+                        tmp = new ArrayList<>();
                     }
 
                     dst.add(move.getResult());
-                    src.add(move.getInput());
+                    Value in = move.getInput();
+                    if (dst.contains(in)) {
+                        tmp.add(in);
+                        src.add(Value.ILLEGAL);
+                    } else {
+                        tmp.add(Value.ILLEGAL);
+                        src.add(in);
+                    }
 
                     if (begin == NONE) {
                         // trace begin
@@ -113,7 +123,6 @@ public class StackMoveOptimizationPhase extends PostAllocationOptimizationPhase 
                         reg = move.getScratchRegister();
                         slot = move.getBackupSlot();
                     }
-
                 } else if (begin != NONE) {
                     // end of trace
                     replaceStackMoves(debug, instructions);
@@ -123,13 +132,13 @@ public class StackMoveOptimizationPhase extends PostAllocationOptimizationPhase 
             if (removed) {
                 instructions.removeAll(Collections.singleton(null));
             }
-
         }
 
         private void replaceStackMoves(DebugContext debug, List<LIRInstruction> instructions) {
             int size = dst.size();
             if (size > 1) {
-                AMD64Move.AMD64MultiStackMove multiMove = new AMD64Move.AMD64MultiStackMove(dst.toArray(new AllocatableValue[size]), src.toArray(new AllocatableValue[size]), reg, slot);
+                AMD64Move.AMD64MultiStackMove multiMove = new AMD64Move.AMD64MultiStackMove(dst.toArray(new AllocatableValue[size]), src.toArray(new AllocatableValue[size]),
+                                tmp.toArray(new AllocatableValue[size]), reg, slot);
                 // replace first instruction
                 instructions.set(begin, multiMove);
                 // and null out others
@@ -141,6 +150,7 @@ public class StackMoveOptimizationPhase extends PostAllocationOptimizationPhase 
             // reset
             dst.clear();
             src.clear();
+            tmp.clear();
             begin = NONE;
             reg = null;
             slot = null;

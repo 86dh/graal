@@ -75,12 +75,12 @@ import jdk.vm.ci.meta.JavaKind;
 import jdk.vm.ci.meta.Value;
 
 // @formatter:off
-@SyncPort(from = "https://github.com/openjdk/jdk/blob/0a3a925ad88921d387aa851157f54ac0054d347b/src/hotspot/cpu/x86/c2_MacroAssembler_x86.cpp#L1698-L1797",
-          sha1 = "a93850c44f7e34fcec05226bae95fd695b2ea2f7")
-@SyncPort(from = "https://github.com/openjdk/jdk/blob/0a3a925ad88921d387aa851157f54ac0054d347b/src/hotspot/cpu/x86/c2_MacroAssembler_x86.cpp#L1919-L1965",
+@SyncPort(from = "https://github.com/openjdk/jdk/blob/22845a77a2175202876d0029f75fa32271e07b91/src/hotspot/cpu/x86/c2_MacroAssembler_x86.cpp#L1837-L1946",
+          sha1 = "1cc5a10b19e7746105493d8f430f628cc7f89c51")
+@SyncPort(from = "https://github.com/openjdk/jdk/blob/22845a77a2175202876d0029f75fa32271e07b91/src/hotspot/cpu/x86/c2_MacroAssembler_x86.cpp#L2137-L2183",
           sha1 = "9cbba8bd6c4037427fa46f067abb722b15aca90c")
-@SyncPort(from = "https://github.com/openjdk/jdk/blob/0a3a925ad88921d387aa851157f54ac0054d347b/src/hotspot/cpu/x86/c2_MacroAssembler_x86.cpp#L3237-L3424",
-          sha1 = "2457cf3f9d3ff89c1515fa5d95cc7c8437a5318b")
+@SyncPort(from = "https://github.com/openjdk/jdk/blob/2c4567a689091721476b6ef0ef4ad042fd63c3fd/src/hotspot/cpu/x86/c2_MacroAssembler_x86.cpp#L3498-L3685",
+          sha1 = "a3fe941a49e0e3f8443b2e16e550d6c94b012b12")
 // @formatter:on
 @Opcode("VECTORIZED_HASHCODE")
 public final class AMD64VectorizedHashCodeOp extends AMD64ComplexVectorOp {
@@ -334,8 +334,12 @@ public final class AMD64VectorizedHashCodeOp extends AMD64ComplexVectorOp {
         masm.bind(labelUnrolledVectorLoopBegin);
         // result *= next;
         masm.imull(result, next);
-        // loop fission to upfront the cost of fetching from memory, OOO execution
-        // can then hopefully do a better job of prefetching
+        /*
+         * Load the next 32 data elements into 4 vector registers. By grouping the loads and
+         * fetching from memory up front (loop fission), out-of-order execution can hopefully do a
+         * better job of prefetching, while also allowing subsequent instructions to be executed
+         * while data are still being fetched.
+         */
         for (int idx = 0; idx < 4; idx++) {
             loadVector(masm, vtmp[idx], new AMD64Address(ary1, index, stride, 8 * idx * elsize), elsize * 8);
         }

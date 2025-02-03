@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2015, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -36,6 +36,7 @@ import jdk.graal.compiler.nodes.NamedLocationIdentity;
 import jdk.graal.compiler.nodes.NodeView;
 import jdk.graal.compiler.nodes.ValueNode;
 import jdk.graal.compiler.nodes.calc.CopySignNode;
+import jdk.graal.compiler.nodes.calc.FusedMultiplyAddNode;
 import jdk.graal.compiler.nodes.calc.LeftShiftNode;
 import jdk.graal.compiler.nodes.calc.MaxNode;
 import jdk.graal.compiler.nodes.calc.MinNode;
@@ -61,38 +62,28 @@ import jdk.graal.compiler.replacements.StringLatin1Snippets;
 import jdk.graal.compiler.replacements.StringUTF16CompressNode;
 import jdk.graal.compiler.replacements.StringUTF16Snippets;
 import jdk.graal.compiler.replacements.TargetGraphBuilderPlugins;
-import jdk.graal.compiler.replacements.nodes.BinaryMathIntrinsicNode;
-import jdk.graal.compiler.replacements.nodes.CountTrailingZerosNode;
-import jdk.graal.compiler.replacements.nodes.FloatToHalfFloatNode;
-import jdk.graal.compiler.replacements.nodes.FusedMultiplyAddNode;
-import jdk.graal.compiler.replacements.nodes.UnaryMathIntrinsicNode;
 import jdk.graal.compiler.replacements.nodes.ArrayCompareToNode;
 import jdk.graal.compiler.replacements.nodes.ArrayIndexOfNode;
-import jdk.graal.compiler.replacements.nodes.CountLeadingZerosNode;
+import jdk.graal.compiler.replacements.nodes.BinaryMathIntrinsicNode;
+import jdk.graal.compiler.replacements.nodes.FloatToHalfFloatNode;
 import jdk.graal.compiler.replacements.nodes.HalfFloatToFloatNode;
-import jdk.graal.compiler.replacements.nodes.MessageDigestNode;
+import jdk.graal.compiler.replacements.nodes.UnaryMathIntrinsicNode;
 import jdk.graal.compiler.serviceprovider.JavaVersionUtil;
-
-import jdk.vm.ci.aarch64.AArch64;
 import jdk.vm.ci.code.Architecture;
 import jdk.vm.ci.meta.JavaKind;
-import jdk.vm.ci.meta.ResolvedJavaField;
 import jdk.vm.ci.meta.ResolvedJavaMethod;
-import jdk.vm.ci.meta.ResolvedJavaType;
 
 public class AArch64GraphBuilderPlugins implements TargetGraphBuilderPlugins {
     @Override
     public void register(Plugins plugins, Replacements replacements, Architecture arch, boolean registerForeignCallMath, OptionValues options) {
-        register(plugins, replacements, (AArch64) arch, registerForeignCallMath, options);
+        register(plugins, replacements, registerForeignCallMath, options);
     }
 
-    public static void register(Plugins plugins, Replacements replacements, AArch64 arch, boolean registerForeignCallMath, OptionValues options) {
+    public static void register(Plugins plugins, Replacements replacements, boolean registerForeignCallMath, OptionValues options) {
         InvocationPlugins invocationPlugins = plugins.getInvocationPlugins();
         invocationPlugins.defer(new Runnable() {
             @Override
             public void run() {
-                registerIntegerLongPlugins(invocationPlugins, JavaKind.Int, replacements);
-                registerIntegerLongPlugins(invocationPlugins, JavaKind.Long, replacements);
                 registerFloatPlugins(invocationPlugins, replacements);
                 registerMathPlugins(invocationPlugins, registerForeignCallMath);
                 registerStrictMathPlugins(invocationPlugins);
@@ -100,34 +91,6 @@ public class AArch64GraphBuilderPlugins implements TargetGraphBuilderPlugins {
                     registerStringLatin1Plugins(invocationPlugins, replacements);
                     registerStringUTF16Plugins(invocationPlugins, replacements);
                 }
-                registerSHA3Plugins(invocationPlugins, replacements, arch);
-            }
-        });
-    }
-
-    private static void registerIntegerLongPlugins(InvocationPlugins plugins, JavaKind kind, Replacements replacements) {
-        Class<?> declaringClass = kind.toBoxedJavaClass();
-        Class<?> type = kind.toJavaClass();
-        Registration r = new Registration(plugins, declaringClass, replacements);
-        r.register(new InvocationPlugin("numberOfLeadingZeros", type) {
-            @Override
-            public boolean apply(GraphBuilderContext b, ResolvedJavaMethod targetMethod, Receiver receiver, ValueNode value) {
-                b.addPush(JavaKind.Int, CountLeadingZerosNode.create(value));
-                return true;
-            }
-        });
-        r.register(new InvocationPlugin("numberOfTrailingZeros", type) {
-            @Override
-            public boolean apply(GraphBuilderContext b, ResolvedJavaMethod targetMethod, Receiver receiver, ValueNode value) {
-                b.addPush(JavaKind.Int, CountTrailingZerosNode.create(value));
-                return true;
-            }
-        });
-        r.register(new InvocationPlugin("bitCount", type) {
-            @Override
-            public boolean apply(GraphBuilderContext b, ResolvedJavaMethod targetMethod, Receiver receiver, ValueNode value) {
-                b.push(JavaKind.Int, b.append(new AArch64BitCountNode(value).canonical(null)));
-                return true;
             }
         });
     }
@@ -135,22 +98,20 @@ public class AArch64GraphBuilderPlugins implements TargetGraphBuilderPlugins {
     private static void registerFloatPlugins(InvocationPlugins plugins, Replacements replacements) {
         Registration r = new Registration(plugins, Float.class, replacements);
 
-        if (JavaVersionUtil.JAVA_SPEC >= 20) {
-            r.register(new InvocationPlugin("float16ToFloat", short.class) {
-                @Override
-                public boolean apply(GraphBuilderContext b, ResolvedJavaMethod targetMethod, Receiver receiver, ValueNode value) {
-                    b.push(JavaKind.Float, b.append(new HalfFloatToFloatNode(value)));
-                    return true;
-                }
-            });
-            r.register(new InvocationPlugin("floatToFloat16", float.class) {
-                @Override
-                public boolean apply(GraphBuilderContext b, ResolvedJavaMethod targetMethod, Receiver receiver, ValueNode value) {
-                    b.push(JavaKind.Short, b.append(new FloatToHalfFloatNode(value)));
-                    return true;
-                }
-            });
-        }
+        r.register(new InvocationPlugin("float16ToFloat", short.class) {
+            @Override
+            public boolean apply(GraphBuilderContext b, ResolvedJavaMethod targetMethod, Receiver receiver, ValueNode value) {
+                b.push(JavaKind.Float, b.append(new HalfFloatToFloatNode(value)));
+                return true;
+            }
+        });
+        r.register(new InvocationPlugin("floatToFloat16", float.class) {
+            @Override
+            public boolean apply(GraphBuilderContext b, ResolvedJavaMethod targetMethod, Receiver receiver, ValueNode value) {
+                b.push(JavaKind.Short, b.append(new FloatToHalfFloatNode(value)));
+                return true;
+            }
+        });
     }
 
     private static void registerMathPlugins(InvocationPlugins plugins, boolean registerForeignCallMath) {
@@ -462,7 +423,7 @@ public class AArch64GraphBuilderPlugins implements TargetGraphBuilderPlugins {
                 return templates.indexOfUnsafe;
             }
         });
-        r.register(new InvocationPlugin("indexOfCharUnsafe", byte[].class, int.class, int.class, int.class) {
+        r.register(new InvocationPlugin(JavaVersionUtil.JAVA_SPEC == 21 ? "indexOfCharUnsafe" : "indexOfChar", byte[].class, int.class, int.class, int.class) {
             @Override
             public boolean apply(GraphBuilderContext b, ResolvedJavaMethod targetMethod, Receiver receiver, ValueNode value, ValueNode ch, ValueNode fromIndex, ValueNode max) {
                 ZeroExtendNode toChar = b.add(new ZeroExtendNode(b.add(new NarrowNode(ch, JavaKind.Char.getBitCount())), JavaKind.Int.getBitCount()));
@@ -478,28 +439,6 @@ public class AArch64GraphBuilderPlugins implements TargetGraphBuilderPlugins {
                                 new IndexAddressNode(arg1, new LeftShiftNode(arg2, ConstantNode.forInt(1)), JavaKind.Byte),
                                 NamedLocationIdentity.getArrayLocation(JavaKind.Byte), BarrierType.NONE, MemoryOrderMode.PLAIN, false));
                 return true;
-            }
-        });
-    }
-
-    private static void registerSHA3Plugins(InvocationPlugins plugins, Replacements replacements, Architecture arch) {
-        Registration rSha3 = new Registration(plugins, "sun.security.provider.SHA3", replacements);
-        rSha3.registerConditional(MessageDigestNode.SHA3Node.isSupported(arch), new InvocationPlugin("implCompress0", InvocationPlugin.Receiver.class, byte[].class, int.class) {
-            @Override
-            public boolean apply(GraphBuilderContext b, ResolvedJavaMethod targetMethod, Receiver receiver, ValueNode buf, ValueNode ofs) {
-                try (InvocationPluginHelper helper = new InvocationPluginHelper(b, targetMethod)) {
-                    ResolvedJavaType receiverType = targetMethod.getDeclaringClass();
-                    ResolvedJavaField stateField = helper.getField(receiverType, "state");
-                    ResolvedJavaField blockSizeField = helper.getField(receiverType, "blockSize");
-
-                    ValueNode nonNullReceiver = receiver.get();
-                    ValueNode bufStart = helper.arrayElementPointer(buf, JavaKind.Byte, ofs);
-                    ValueNode state = helper.loadField(nonNullReceiver, stateField);
-                    ValueNode stateStart = helper.arrayStart(state, JavaKind.Byte);
-                    ValueNode blockSize = helper.loadField(nonNullReceiver, blockSizeField);
-                    b.add(new MessageDigestNode.SHA3Node(bufStart, stateStart, blockSize));
-                    return true;
-                }
             }
         });
     }

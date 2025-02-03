@@ -26,15 +26,14 @@ package com.oracle.svm.core.c.function;
 
 import java.util.function.Function;
 
+import jdk.graal.compiler.word.Word;
 import org.graalvm.nativeimage.CurrentIsolate;
 import org.graalvm.nativeimage.Isolate;
 import org.graalvm.nativeimage.IsolateThread;
 import org.graalvm.nativeimage.c.CHeader;
 import org.graalvm.nativeimage.c.function.CEntryPoint;
 import org.graalvm.nativeimage.c.struct.CPointerTo;
-import org.graalvm.word.Pointer;
 import org.graalvm.word.PointerBase;
-import org.graalvm.word.WordFactory;
 
 import com.oracle.svm.core.SubstrateOptions;
 import com.oracle.svm.core.Uninterruptible;
@@ -118,7 +117,7 @@ public final class CEntryPointNativeFunctions {
     public static IsolateThread getCurrentThread(Isolate isolate) {
         int status = CEntryPointActions.enterByIsolate(isolate);
         if (status != 0) {
-            return WordFactory.nullPointer();
+            return Word.nullPointer();
         }
 
         IsolateThread thread = CurrentIsolate.getCurrentThread();
@@ -137,13 +136,9 @@ public final class CEntryPointNativeFunctions {
 
     @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     private static Isolate getIsolateOf(IsolateThread thread) {
-        Isolate isolate = WordFactory.nullPointer();
-        if (thread.isNull()) {
-            // proceed to return null
-        } else if (SubstrateOptions.MultiThreaded.getValue()) {
+        Isolate isolate = Word.nullPointer();
+        if (thread.isNonNull()) {
             isolate = VMThreads.IsolateTL.get(thread);
-        } else if (SubstrateOptions.SpawnIsolates.getValue() || thread.equal(CEntryPointSetup.SINGLE_THREAD_SENTINEL)) {
-            isolate = (Isolate) ((Pointer) thread).subtract(CEntryPointSetup.SINGLE_ISOLATE_TO_SINGLE_THREAD_ADDEND);
         }
         return isolate;
     }
@@ -196,9 +191,7 @@ public final class CEntryPointNativeFunctions {
         if (result != 0) {
             return result;
         }
-        if (SubstrateOptions.MultiThreaded.getValue()) {
-            detachAllThreadsAndTearDownIsolate0();
-        }
+        detachAllThreadsAndTearDownIsolate0();
         return CEntryPointActions.leaveTearDownIsolate();
     }
 

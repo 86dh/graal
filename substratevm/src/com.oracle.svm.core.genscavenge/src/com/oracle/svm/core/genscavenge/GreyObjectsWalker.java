@@ -24,10 +24,10 @@
  */
 package com.oracle.svm.core.genscavenge;
 
+import jdk.graal.compiler.word.Word;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
 import org.graalvm.word.Pointer;
-import org.graalvm.word.WordFactory;
 
 import com.oracle.svm.core.AlwaysInline;
 import com.oracle.svm.core.NeverInline;
@@ -62,7 +62,7 @@ final class GreyObjectsWalker {
         space = s;
         AlignedHeapChunk.AlignedHeader aChunk = s.getLastAlignedHeapChunk();
         alignedHeapChunk = aChunk;
-        alignedTop = (aChunk.isNonNull() ? HeapChunk.getTopPointer(aChunk) : WordFactory.nullPointer());
+        alignedTop = (aChunk.isNonNull() ? HeapChunk.getTopPointer(aChunk) : Word.nullPointer());
         unalignedHeapChunk = s.getLastUnalignedHeapChunk();
     }
 
@@ -87,12 +87,15 @@ final class GreyObjectsWalker {
     @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     private void walkAlignedGreyObjects() {
         AlignedHeapChunk.AlignedHeader aChunk;
+        Pointer aStart;
         if (alignedHeapChunk.isNull() && alignedTop.isNull()) {
             /* If the snapshot is empty, then I have to walk from the beginning of the Space. */
             aChunk = space.getFirstAlignedHeapChunk();
+            aStart = (aChunk.isNonNull() ? AlignedHeapChunk.getObjectsStart(aChunk) : Word.nullPointer());
         } else {
             /* Otherwise walk Objects that arrived after the snapshot. */
             aChunk = alignedHeapChunk;
+            aStart = alignedTop;
         }
         /* Visit Objects in the AlignedChunks. */
         GreyToBlackObjectVisitor visitor = GCImpl.getGCImpl().getGreyToBlackObjectVisitor();
@@ -100,10 +103,11 @@ final class GreyObjectsWalker {
             AlignedHeapChunk.AlignedHeader lastChunk;
             do {
                 lastChunk = aChunk;
-                if (!AlignedHeapChunk.walkObjectsInline(aChunk, visitor)) {
+                if (!AlignedHeapChunk.walkObjectsFromInline(aChunk, aStart, visitor)) {
                     throw VMError.shouldNotReachHereAtRuntime();
                 }
                 aChunk = HeapChunk.getNext(aChunk);
+                aStart = (aChunk.isNonNull() ? AlignedHeapChunk.getObjectsStart(aChunk) : Word.nullPointer());
             } while (aChunk.isNonNull());
 
             /* Move the scan point. */

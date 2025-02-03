@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2022, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2022, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -83,7 +83,7 @@ public class BytecodeSuite {
 
     @Test
     public void testLabelU8ResultRef() {
-        test(b -> b.addLabel(1, 0, WasmType.REF_COMMON_TYPE), new byte[]{Bytecode.SKIP_LABEL_U8, Bytecode.LABEL_U8, (byte) 0xC0});
+        test(b -> b.addLabel(1, 0, WasmType.OBJ_COMMON_TYPE), new byte[]{Bytecode.SKIP_LABEL_U8, Bytecode.LABEL_U8, (byte) 0xC0});
     }
 
     @Test
@@ -98,7 +98,7 @@ public class BytecodeSuite {
 
     @Test
     public void testLabelU16ResultRef() {
-        test(b -> b.addLabel(2, 0, WasmType.REF_COMMON_TYPE), new byte[]{Bytecode.SKIP_LABEL_U16, Bytecode.LABEL_U16, (byte) 0x82, 0x00});
+        test(b -> b.addLabel(2, 0, WasmType.OBJ_COMMON_TYPE), new byte[]{Bytecode.SKIP_LABEL_U16, Bytecode.LABEL_U16, (byte) 0x82, 0x00});
     }
 
     @Test
@@ -113,7 +113,7 @@ public class BytecodeSuite {
 
     @Test
     public void testLabelI32ResultRef() {
-        test(b -> b.addLabel(64, 0, WasmType.REF_COMMON_TYPE), new byte[]{Bytecode.SKIP_LABEL_I32, Bytecode.LABEL_I32, 0x02, 0x40, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00});
+        test(b -> b.addLabel(64, 0, WasmType.OBJ_COMMON_TYPE), new byte[]{Bytecode.SKIP_LABEL_I32, Bytecode.LABEL_I32, 0x02, 0x40, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00});
     }
 
     @Test
@@ -608,42 +608,37 @@ public class BytecodeSuite {
 
     @Test
     public void testDataRuntimeHeaderMin() {
-        test(b -> b.addDataRuntimeHeader(1, false), new byte[]{0x01});
+        test(b -> b.addDataRuntimeHeader(1), new byte[]{0x01});
     }
 
     @Test
     public void testDataRuntimeHeaderMaxInlineLength() {
-        test(b -> b.addDataRuntimeHeader(63, false), new byte[]{0x3F});
+        test(b -> b.addDataRuntimeHeader(63), new byte[]{0x3F});
     }
 
     @Test
     public void testDataRuntimeHeaderMinU8Length() {
-        test(b -> b.addDataRuntimeHeader(64, false), new byte[]{0x40, 0x40});
+        test(b -> b.addDataRuntimeHeader(64), new byte[]{0x40, 0x40});
     }
 
     @Test
     public void testDataRuntimeHeaderMaxU8Length() {
-        test(b -> b.addDataRuntimeHeader(255, false), new byte[]{0x40, (byte) 0xFF});
+        test(b -> b.addDataRuntimeHeader(255), new byte[]{0x40, (byte) 0xFF});
     }
 
     @Test
     public void testDataRuntimeHeaderMinU16Length() {
-        test(b -> b.addDataRuntimeHeader(256, false), new byte[]{(byte) 0x80, 0x00, 0x01});
+        test(b -> b.addDataRuntimeHeader(256), new byte[]{(byte) 0x80, 0x00, 0x01});
     }
 
     @Test
     public void testDataRuntimeHeaderMaxU16Length() {
-        test(b -> b.addDataRuntimeHeader(65535, false), new byte[]{(byte) 0x80, (byte) 0xFF, (byte) 0xFF});
+        test(b -> b.addDataRuntimeHeader(65535), new byte[]{(byte) 0x80, (byte) 0xFF, (byte) 0xFF});
     }
 
     @Test
     public void testDataRuntimeHeaderMinI32Length() {
-        test(b -> b.addDataRuntimeHeader(65536, false), new byte[]{(byte) 0xC0, 0x00, 0x00, 0x01, 0x00});
-    }
-
-    @Test
-    public void testDataRuntimeHeaderUnsafe() {
-        test(b -> b.addDataRuntimeHeader(512, true), new byte[]{(byte) 0x80, 0x00, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00});
+        test(b -> b.addDataRuntimeHeader(65536), new byte[]{(byte) 0xC0, 0x00, 0x00, 0x01, 0x00});
     }
 
     @Test

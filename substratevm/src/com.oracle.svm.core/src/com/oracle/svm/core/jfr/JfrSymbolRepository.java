@@ -24,15 +24,12 @@
  */
 package com.oracle.svm.core.jfr;
 
-import jdk.graal.compiler.core.common.SuppressFBWarnings;
-import jdk.graal.compiler.word.Word;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
 import org.graalvm.nativeimage.StackValue;
 import org.graalvm.nativeimage.c.struct.RawField;
 import org.graalvm.nativeimage.c.struct.RawStructure;
 import org.graalvm.nativeimage.c.struct.SizeOf;
-import org.graalvm.word.WordFactory;
 
 import com.oracle.svm.core.Uninterruptible;
 import com.oracle.svm.core.c.struct.PinnedObjectField;
@@ -43,6 +40,10 @@ import com.oracle.svm.core.jdk.UninterruptibleUtils;
 import com.oracle.svm.core.jdk.UninterruptibleUtils.CharReplacer;
 import com.oracle.svm.core.jfr.traceid.JfrTraceIdEpoch;
 import com.oracle.svm.core.locks.VMMutex;
+import com.oracle.svm.core.nmt.NmtCategory;
+
+import jdk.graal.compiler.core.common.SuppressFBWarnings;
+import jdk.graal.compiler.word.Word;
 
 /**
  * In Native Image, we use {@link java.lang.String} objects that live in the image heap as symbols.
@@ -179,6 +180,11 @@ public class JfrSymbolRepository implements JfrRepository {
     private static class JfrSymbolHashtable extends AbstractUninterruptibleHashtable {
         private static long nextId;
 
+        @Platforms(Platform.HOSTED_ONLY.class)
+        JfrSymbolHashtable() {
+            super(NmtCategory.JFR);
+        }
+
         @Override
         @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
         protected JfrSymbol[] createTable(int size) {
@@ -235,11 +241,11 @@ public class JfrSymbolRepository implements JfrRepository {
             table.teardown();
             unflushedEntries = 0;
             JfrBufferAccess.free(buffer);
-            buffer = WordFactory.nullPointer();
+            buffer = Word.nullPointer();
         }
     }
 
-    private static class ReplaceDotWithSlash implements CharReplacer {
+    private static final class ReplaceDotWithSlash implements CharReplacer {
         @Override
         @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
         public char replace(char ch) {

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2009, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -84,6 +84,7 @@ import jdk.graal.compiler.nodes.spi.Simplifiable;
 import jdk.graal.compiler.nodes.spi.SimplifierTool;
 import jdk.graal.compiler.nodes.spi.SwitchFoldable;
 import jdk.graal.compiler.nodes.util.GraphUtil;
+import jdk.graal.compiler.replacements.nodes.arithmetic.IntegerExactOverflowNode;
 import jdk.vm.ci.code.CodeUtil;
 import jdk.vm.ci.meta.Constant;
 import jdk.vm.ci.meta.JavaConstant;
@@ -177,8 +178,8 @@ public final class IfNode extends ControlSplitNode implements Simplifiable, LIRL
 
     public void setTrueSuccessorProbability(BranchProbabilityData profileData) {
         double prob = profileData.getDesignatedSuccessorProbability();
-        assert prob >= -0.000000001 && prob <= 1.000000001 : "Probability out of bounds: " + prob;
-        double trueSuccessorProbability = Math.min(1.0, Math.max(0.0, prob));
+        assert ProfileData.isApproximatelyInRange(prob, 0.0, 1.0) : "Probability out of bounds: " + prob;
+        double trueSuccessorProbability = Math.clamp(prob, 0.0, 1.0);
         this.profileData = profileData.copy(trueSuccessorProbability);
     }
 
@@ -197,11 +198,11 @@ public final class IfNode extends ControlSplitNode implements Simplifiable, LIRL
     }
 
     @Override
-    public boolean verify() {
+    public boolean verifyNode() {
         assertTrue(condition() != null, "missing condition");
         assertTrue(trueSuccessor() != null, "missing trueSuccessor");
         assertTrue(falseSuccessor() != null, "missing falseSuccessor");
-        return super.verify();
+        return super.verifyNode();
     }
 
     public void eliminateNegation() {
@@ -1327,7 +1328,7 @@ public final class IfNode extends ControlSplitNode implements Simplifiable, LIRL
         } else if (next1 instanceof DeoptimizeNode && next2 instanceof DeoptimizeNode) {
             DeoptimizeNode deopt1 = (DeoptimizeNode) next1;
             DeoptimizeNode deopt2 = (DeoptimizeNode) next2;
-            if (deopt1.getReason() == deopt2.getReason() && deopt1.getAction() == deopt2.getAction()) {
+            if (deopt1.getReason() == deopt2.getReason() && deopt1.getAction() == deopt2.getAction() && deopt1.stateBefore() == deopt2.stateBefore()) {
                 // Same deoptimization reason and action.
                 return true;
             }
@@ -1704,6 +1705,13 @@ public final class IfNode extends ControlSplitNode implements Simplifiable, LIRL
             return null;
         }
         if (trueValue.getStackKind() != JavaKind.Int && trueValue.getStackKind() != JavaKind.Long) {
+            return null;
+        }
+        if (condition() instanceof IntegerExactOverflowNode) {
+            /*
+             * An exact overflow node is tightly coupled to the if node that uses it. It must not be
+             * used as the condition in a conditional node.
+             */
             return null;
         }
         if (isSafeConditionalInput(trueValue, trueSuccessor) && isSafeConditionalInput(falseValue, falseSuccessor)) {
@@ -2256,19 +2264,20 @@ public final class IfNode extends ControlSplitNode implements Simplifiable, LIRL
     private void connectEnds(List<EndNode> ends, ValuePhiNode phi, EconomicMap<AbstractEndNode, ValueNode> phiValues, AbstractBeginNode successor, AbstractMergeNode oldMerge, SimplifierTool tool) {
         if (!ends.isEmpty()) {
             // If there was a value proxy usage, then the proxy needs a new value.
-            ValueProxyNode valueProxy = null;
+            List<Node> valueProxies;
             if (successor instanceof LoopExitNode) {
-                for (Node usage : phi.usages()) {
-                    if (usage instanceof ValueProxyNode && ((ValueProxyNode) usage).proxyPoint() == successor) {
-                        valueProxy = (ValueProxyNode) usage;
-                    }
-                }
+                /*
+                 * In rare cases the ValueProxyNodes might not have GVN'ed so handle as many
+                 * matching ValueProxyNodes as exist.
+                 */
+                valueProxies = phi.usages().filter(u -> u instanceof ValueProxyNode && ((ValueProxyNode) u).proxyPoint() == successor).snapshot();
+            } else {
+                valueProxies = null;
             }
-            final ValueProxyNode proxy = valueProxy;
             if (ends.size() == 1) {
                 AbstractEndNode end = ends.get(0);
-                if (proxy != null) {
-                    phi.replaceAtUsages(phiValues.get(end), n -> n == proxy);
+                if (valueProxies != null) {
+                    phi.replaceAtUsages(phiValues.get(end), valueProxies::contains);
                 }
                 ((FixedWithNextNode) end.predecessor()).setNext(successor);
                 oldMerge.removeEnd(end);
@@ -2281,8 +2290,8 @@ public final class IfNode extends ControlSplitNode implements Simplifiable, LIRL
                 PhiNode oldPhi = (PhiNode) oldMerge.usages().first();
                 PhiNode newPhi = graph().addWithoutUnique(new ValuePhiNode(oldPhi.stamp(view), newMerge));
 
-                if (proxy != null) {
-                    phi.replaceAtUsages(newPhi, n -> n == proxy);
+                if (valueProxies != null) {
+                    phi.replaceAtUsages(newPhi, valueProxies::contains);
                 }
 
                 for (EndNode end : ends) {

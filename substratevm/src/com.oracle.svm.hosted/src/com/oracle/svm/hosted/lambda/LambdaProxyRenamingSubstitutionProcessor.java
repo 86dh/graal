@@ -28,18 +28,10 @@ import java.util.HashSet;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
-import jdk.graal.compiler.debug.DebugContext;
-import jdk.graal.compiler.debug.DebugContext.Builder;
-import jdk.graal.compiler.java.LambdaUtils;
-import jdk.graal.compiler.options.OptionValues;
-import jdk.graal.compiler.phases.util.Providers;
-import jdk.graal.compiler.printer.GraalDebugHandlersFactory;
-
-import com.oracle.graal.pointsto.BigBang;
 import com.oracle.graal.pointsto.infrastructure.SubstitutionProcessor;
-import com.oracle.graal.pointsto.phases.NoClassInitializationPlugin;
-import com.oracle.graal.pointsto.util.GraalAccess;
+import com.oracle.graal.pointsto.meta.BaseLayerType;
 
+import jdk.graal.compiler.java.LambdaUtils;
 import jdk.vm.ci.meta.ResolvedJavaType;
 
 /**
@@ -54,30 +46,18 @@ import jdk.vm.ci.meta.ResolvedJavaType;
 
 public class LambdaProxyRenamingSubstitutionProcessor extends SubstitutionProcessor {
 
-    private final BigBang bb;
-
     private final ConcurrentHashMap<ResolvedJavaType, LambdaSubstitutionType> typeSubstitutions;
     private final Set<String> uniqueLambdaProxyNames;
 
-    LambdaProxyRenamingSubstitutionProcessor(BigBang bb) {
+    LambdaProxyRenamingSubstitutionProcessor() {
         this.typeSubstitutions = new ConcurrentHashMap<>();
         this.uniqueLambdaProxyNames = new HashSet<>();
-        this.bb = bb;
     }
 
     @Override
     public ResolvedJavaType lookup(ResolvedJavaType type) {
-        if (LambdaUtils.isLambdaType(type) && !type.getClass().equals(LambdaSubstitutionType.class)) {
+        if (LambdaUtils.isLambdaType(type) && !type.getClass().equals(LambdaSubstitutionType.class) && !(type.getClass().equals(BaseLayerType.class))) {
             return getSubstitution(type);
-        } else {
-            return type;
-        }
-    }
-
-    @Override
-    public ResolvedJavaType resolve(ResolvedJavaType type) {
-        if (type instanceof LambdaSubstitutionType) {
-            return ((LambdaSubstitutionType) type).getOriginal();
         } else {
             return type;
         }
@@ -85,11 +65,7 @@ public class LambdaProxyRenamingSubstitutionProcessor extends SubstitutionProces
 
     private LambdaSubstitutionType getSubstitution(ResolvedJavaType original) {
         return typeSubstitutions.computeIfAbsent(original, (key) -> {
-            OptionValues options = bb.getOptions();
-            DebugContext debug = new Builder(options, new GraalDebugHandlersFactory(bb.getSnippetReflectionProvider())).build();
-
-            Providers providers = GraalAccess.getOriginalProviders();
-            String lambdaTargetName = LambdaUtils.findStableLambdaName(new NoClassInitializationPlugin(), providers, key, options, debug, this);
+            String lambdaTargetName = LambdaUtils.findStableLambdaName(key);
             return new LambdaSubstitutionType(key, findUniqueLambdaProxyName(lambdaTargetName));
         });
     }
@@ -115,4 +91,7 @@ public class LambdaProxyRenamingSubstitutionProcessor extends SubstitutionProces
         }
     }
 
+    public boolean isNameAlwaysStable(String lambdaTargetName) {
+        return !uniqueLambdaProxyNames.contains(lambdaTargetName.substring(0, lambdaTargetName.length() - 1) + "1;");
+    }
 }

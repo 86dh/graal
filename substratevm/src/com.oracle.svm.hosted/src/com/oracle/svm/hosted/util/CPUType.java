@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2023, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -26,6 +26,7 @@ package com.oracle.svm.hosted.util;
 
 import java.util.Arrays;
 import java.util.Comparator;
+import java.util.List;
 
 import org.graalvm.nativeimage.Platform;
 
@@ -79,11 +80,15 @@ public interface CPUType {
         } else if (Platform.includedIn(Platform.AMD64.class)) {
             return CPUTypeAMD64.getDefaultName(false);
         } else if (Platform.includedIn(Platform.AARCH64.class)) {
-            return CPUTypeAArch64.getDefaultName();
+            return CPUTypeAArch64.getDefaultName(false);
         } else if (Platform.includedIn(Platform.RISCV64.class)) {
             return CPUTypeRISCV64.getDefaultName();
         } else {
             return "unknown";
         }
+    }
+
+    static List<String> toNames(CPUType[] values) {
+        return Arrays.stream(values).map(CPUType::getName).toList();
     }
 }

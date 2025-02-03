@@ -29,12 +29,16 @@ import java.nio.file.Paths;
 import java.util.List;
 import java.util.Optional;
 import java.util.regex.Pattern;
+import java.util.regex.PatternSyntaxException;
 
+import com.oracle.svm.core.SubstrateOptions;
 import com.oracle.svm.core.VM;
 import com.oracle.svm.core.option.OptionOrigin;
-import com.oracle.svm.core.option.OptionUtils;
 import com.oracle.svm.core.util.ExitStatus;
 import com.oracle.svm.driver.NativeImage.ArgumentQueue;
+import com.oracle.svm.hosted.imagelayer.LayerArchiveSupport;
+import com.oracle.svm.hosted.imagelayer.LayerOptionsSupport.ExtendedOption;
+import com.oracle.svm.hosted.imagelayer.LayerOptionsSupport.LayerOption;
 import com.oracle.svm.util.LogUtils;
 
 import jdk.graal.compiler.options.OptionType;
@@ -76,29 +80,19 @@ class CmdLineOptionHandler extends NativeImage.OptionHandler<NativeImage> {
     private boolean consume(ArgumentQueue args, String headArg) {
         switch (headArg) {
             case "--help":
-                args.poll();
-                singleArgumentCheck(args, headArg);
                 nativeImage.showMessage(HELP_TEXT);
                 nativeImage.showNewline();
                 nativeImage.apiOptionHandler.printOptions(nativeImage::showMessage, false);
                 nativeImage.showNewline();
-                nativeImage.optionRegistry.showOptions(null, true, nativeImage::showMessage);
-                nativeImage.showNewline();
                 System.exit(ExitStatus.OK.getValue());
                 return true;
             case "--version":
-                args.poll();
-                singleArgumentCheck(args, headArg);
                 printVersion();
                 System.exit(ExitStatus.OK.getValue());
                 return true;
             case "--help-extra":
-                args.poll();
-                singleArgumentCheck(args, headArg);
                 nativeImage.showMessage(HELP_EXTRA_TEXT);
                 nativeImage.apiOptionHandler.printOptions(nativeImage::showMessage, true);
-                nativeImage.showNewline();
-                nativeImage.optionRegistry.showOptions(OptionUtils.MacroOptionKind.Macro, true, nativeImage::showMessage);
                 nativeImage.showNewline();
                 System.exit(ExitStatus.OK.getValue());
                 return true;
@@ -114,15 +108,7 @@ class CmdLineOptionHandler extends NativeImage.OptionHandler<NativeImage> {
                 return true;
             case "--exclude-config":
                 args.poll();
-                String excludeJar = args.poll();
-                if (excludeJar == null) {
-                    NativeImage.showError(headArg + " requires two arguments: a jar regular expression and a resource regular expression");
-                }
-                String excludeConfig = args.poll();
-                if (excludeConfig == null) {
-                    NativeImage.showError(headArg + " requires resource regular expression");
-                }
-                nativeImage.addExcludeConfig(Pattern.compile(excludeJar), Pattern.compile(excludeConfig));
+                handleExcludeConfigOption(headArg, args);
                 return true;
             case VERBOSE_OPTION:
                 args.poll();
@@ -156,6 +142,25 @@ class CmdLineOptionHandler extends NativeImage.OptionHandler<NativeImage> {
             return true;
         }
 
+        if (headArg.startsWith(SubstrateOptions.LAYER_CREATE_OPTION)) {
+            String layerCreateValue = headArg.substring(SubstrateOptions.LAYER_CREATE_OPTION.length());
+            if (!layerCreateValue.isEmpty()) {
+                LayerOption layerOption = LayerOption.parse(layerCreateValue);
+                for (ExtendedOption option : layerOption.extendedOptions()) {
+                    switch (option.key()) {
+                        case LayerArchiveSupport.PACKAGE_OPTION -> {
+                            String packageName = option.value();
+                            String moduleName = nativeImage.systemPackagesToModules.get(packageName);
+                            if (moduleName != null) {
+                                nativeImage.addAddedModules(moduleName);
+                            }
+                        }
+                    }
+                }
+            }
+            return false;
+        }
+
         if (headArg.startsWith(DEBUG_ATTACH_OPTION)) {
             if (useDebugAttach) {
                 throw NativeImage.showError("The " + DEBUG_ATTACH_OPTION + " option can only be used once.");
@@ -186,6 +191,30 @@ class CmdLineOptionHandler extends NativeImage.OptionHandler<NativeImage> {
         }
 
         return false;
+    }
+
+    private void handleExcludeConfigOption(String headArg, ArgumentQueue args) {
+        String excludeJar = args.poll();
+        if (excludeJar == null) {
+            NativeImage.showError(headArg + " requires two arguments: a jar regular expression and a resource regular expression");
+        }
+        Pattern jarPattern;
+        try {
+            jarPattern = Pattern.compile(excludeJar);
+        } catch (final PatternSyntaxException pse) {
+            throw NativeImage.showError(headArg + " was used with an invalid jar regular expression: %s", pse);
+        }
+        String excludeConfig = args.poll();
+        if (excludeConfig == null) {
+            NativeImage.showError(headArg + " requires resource regular expression");
+        }
+        Pattern excludeConfigPattern;
+        try {
+            excludeConfigPattern = Pattern.compile(excludeConfig);
+        } catch (final PatternSyntaxException pse) {
+            throw NativeImage.showError(headArg + " was used with an invalid resource regular expression: %s", pse);
+        }
+        nativeImage.addExcludeConfig(jarPattern, excludeConfigPattern);
     }
 
     /**
@@ -221,12 +250,6 @@ class CmdLineOptionHandler extends NativeImage.OptionHandler<NativeImage> {
         String javaVMVersion = System.getProperty("java.vm.version");
         String javaVMInfo = System.getProperty("java.vm.info");
         nativeImage.showMessage("%s%s (%sbuild %s, %s)", javaVMName, vendorVersion, jdkDebugLevel, javaVMVersion, javaVMInfo);
-    }
-
-    private static void singleArgumentCheck(ArgumentQueue args, String arg) {
-        if (!args.isEmpty()) {
-            NativeImage.showError("Option " + arg + " cannot be combined with other options.");
-        }
     }
 
     @Override

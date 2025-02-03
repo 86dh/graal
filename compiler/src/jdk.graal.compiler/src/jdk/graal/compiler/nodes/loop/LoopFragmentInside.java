@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -119,7 +119,7 @@ public class LoopFragmentInside extends LoopFragment {
         }
     };
 
-    public LoopFragmentInside(LoopEx loop) {
+    public LoopFragmentInside(Loop loop) {
         super(loop);
     }
 
@@ -139,18 +139,18 @@ public class LoopFragmentInside extends LoopFragment {
     }
 
     @SuppressWarnings("unused")
-    public void appendInside(LoopEx loop) {
+    public void appendInside(Loop loop) {
         GraalError.unimplemented("intentional"); // ExcludeFromJacocoGeneratedReport
     }
 
     @Override
-    public LoopEx loop() {
+    public Loop loop() {
         assert !this.isDuplicate();
         return super.loop();
     }
 
     @Override
-    public void insertBefore(LoopEx loop) {
+    public void insertBefore(Loop loop) {
         assert this.isDuplicate();
         assert this.original().loop() == loop : "Original loop " + this.original().loop() + " != " + loop;
 
@@ -171,7 +171,7 @@ public class LoopFragmentInside extends LoopFragment {
      * Duplicate the body within the loop after the current copy copy of the body, updating the
      * iteration limit to account for the duplication.
      */
-    public void insertWithinAfter(LoopEx loop, EconomicMap<LoopBeginNode, OpaqueNode> opaqueUnrolledStrides) {
+    public void insertWithinAfter(Loop loop, EconomicMap<LoopBeginNode, OpaqueNode> opaqueUnrolledStrides) {
         assert isDuplicate();
         assert original().loop() == loop : original().loop() + "!=" + loop;
 
@@ -270,7 +270,7 @@ public class LoopFragmentInside extends LoopFragment {
         return ConditionalNode.create(overflowCheck, extremum, newLimit, NodeView.DEFAULT);
     }
 
-    protected CompareNode placeNewSegmentAndCleanup(LoopEx loop, EconomicMap<Node, Node> new2OldPhis, @SuppressWarnings("unused") EconomicMap<Node, Node> originalPhi2Backedges) {
+    protected CompareNode placeNewSegmentAndCleanup(Loop loop, EconomicMap<Node, Node> new2OldPhis, @SuppressWarnings("unused") EconomicMap<Node, Node> originalPhi2Backedges) {
         CountedLoopInfo mainCounted = loop.counted();
         LoopBeginNode mainLoopBegin = loop.loopBegin();
         // Discard the segment entry and its flow, after if merging it into the loop
@@ -282,6 +282,13 @@ public class LoopFragmentInside extends LoopFragment {
 
         if (mainCounted.getBody() != loop.loopBegin()) {
             // regular loop
+            Node predecessor = newSegmentLoopTest.predecessor();
+            while (predecessor instanceof FixedWithNextNode fixedPredecessor) {
+                for (Node usage : fixedPredecessor.usages().snapshot()) {
+                    usage.replaceFirstInput(fixedPredecessor, loopTest.predecessor());
+                }
+                predecessor = fixedPredecessor.predecessor();
+            }
             AbstractBeginNode falseSuccessor = newSegmentLoopTest.falseSuccessor();
             for (Node usage : falseSuccessor.anchored().snapshot()) {
                 usage.replaceFirstInput(falseSuccessor, loopTest.falseSuccessor());
@@ -290,6 +297,8 @@ public class LoopFragmentInside extends LoopFragment {
             for (Node usage : trueSuccessor.anchored().snapshot()) {
                 usage.replaceFirstInput(trueSuccessor, loopTest.trueSuccessor());
             }
+
+            graph.getDebug().dump(DebugContext.DETAILED_LEVEL, graph, "After stitching new segment into control flow after existing one");
 
             assert graph.isBeforeStage(GraphState.StageFlag.VALUE_PROXY_REMOVAL) || mainLoopBegin.loopExits().count() <= 1 : "Can only merge early loop exits if graph has value proxies " +
                             mainLoopBegin;
@@ -300,7 +309,16 @@ public class LoopFragmentInside extends LoopFragment {
             graph.removeSplitPropagate(newSegmentLoopTest, loopTest.trueSuccessor() == mainCounted.getBody() ? trueSuccessor : falseSuccessor);
 
             graph.getDebug().dump(DebugContext.DETAILED_LEVEL, graph, "Before placing segment");
-            if (mainCounted.getBody().next() instanceof LoopEndNode) {
+            if (mainCounted.getBody().next() instanceof LoopEndNode && mainCounted.getLimitTest().predecessor() == mainCounted.loop.loopBegin()) {
+                /**
+                 * We assume here that the body of the loop is completely empty, i.e., we assume
+                 * that there is no control flow in the counted loop body. This however means that
+                 * we also did not have any code between the loop header and the counted begin (we
+                 * allow a few special nodes there). Else we would be killing nodes that are as well
+                 * between - that potentially could be used by loop phis (which we also disallow).
+                 * Thus, just be safe here and ensure we really see the pattern we are expect namely
+                 * a completely empty (fixed nodes) loop body.
+                 */
                 GraphUtil.killCFG(getDuplicatedNode(mainLoopBegin));
             } else {
                 AbstractBeginNode newSegmentBegin = getDuplicatedNode(mainLoopBegin);
@@ -320,11 +338,16 @@ public class LoopFragmentInside extends LoopFragment {
                      * anchor point here ensuring nothing can flow above the original iteration.
                      */
                     if (!(lastCodeNode instanceof GuardingNode) || !(lastCodeNode instanceof AnchoringNode)) {
-                        ValueAnchorNode newAnchoringPointAfterPrevIteration = graph.add(new ValueAnchorNode(null));
+                        ValueAnchorNode newAnchoringPointAfterPrevIteration = graph.add(new ValueAnchorNode());
                         graph.addAfterFixed(lastCodeNode, newAnchoringPointAfterPrevIteration);
                         lastCodeNode = newAnchoringPointAfterPrevIteration;
                     }
                     newSegmentBegin.replaceAtUsages(lastCodeNode, InputType.Guard, InputType.Anchor);
+
+                    // at this point only safepoint usages can live here
+                    assert newSegmentBegin.usages().filter(x -> !(x instanceof SafepointNode)).count() == 0 : "Must only have safepoint(association) usages left for " + newSegmentBegin + " usages=" +
+                                    newSegmentBegin.usages();
+                    newSegmentBegin.replaceAtUsages(mainLoopBegin, InputType.Association);
                 }
                 lastCodeNode.replaceFirstSuccessor(loopEndNode, newSegmentFirstNode);
                 newSegmentLastNode.replaceFirstSuccessor(newSegmentEnd, loopEndNode);
@@ -351,7 +374,7 @@ public class LoopFragmentInside extends LoopFragment {
      * Unrolling loops with multiple exits is special in the way the exits are handled.
      * Pre-Main-Post creation will merge them.
      */
-    protected void mergeEarlyLoopExits(StructuredGraph graph, LoopBeginNode mainLoopBegin, CountedLoopInfo mainCounted, EconomicMap<Node, Node> new2OldPhis, LoopEx loop) {
+    protected void mergeEarlyLoopExits(StructuredGraph graph, LoopBeginNode mainLoopBegin, CountedLoopInfo mainCounted, EconomicMap<Node, Node> new2OldPhis, Loop loop) {
         if (mainLoopBegin.loopExits().count() <= 1) {
             return;
         }
@@ -373,7 +396,7 @@ public class LoopFragmentInside extends LoopFragment {
     }
 
     private void mergeRegularEarlyExit(FixedNode next, AbstractBeginNode exitBranchBegin, LoopExitNode oldExit, LoopBeginNode mainLoopBegin, StructuredGraph graph,
-                    EconomicMap<Node, Node> new2OldPhis, LoopEx loop) {
+                    EconomicMap<Node, Node> new2OldPhis, Loop loop) {
         AbstractMergeNode merge = ((EndNode) next).merge();
         assert merge instanceof MergeNode : "Can only merge loop exits on regular merges";
         assert exitBranchBegin.next() == null;
@@ -397,9 +420,21 @@ public class LoopFragmentInside extends LoopFragment {
         }
     }
 
-    public static ValueNode patchProxyAtPhi(PhiNode phi, LoopExitNode lex, ValueNode proxyInput) {
+    public static ProxyNode patchProxyAtPhi(PhiNode phi, LoopExitNode lex, ValueNode proxyInput) {
+        return patchProxyAtPhi(phi, lex, proxyInput, false);
+    }
+
+    public static ProxyNode patchProxyAtPhi(PhiNode phi, LoopExitNode lex, ValueNode proxyInput, boolean unrestrictedStamp) {
         if (phi instanceof ValuePhiNode) {
-            return phi.graph().addOrUnique(new ValueProxyNode(proxyInput, lex));
+            if (unrestrictedStamp) {
+                /*
+                 * Delay precise stamp injection to the first time #inferStamp is called on the
+                 * value proxy.
+                 */
+                return phi.graph().addOrUnique(new ValueProxyNode(proxyInput.stamp(NodeView.DEFAULT).unrestricted(), proxyInput, lex));
+            } else {
+                return phi.graph().addOrUnique(new ValueProxyNode(proxyInput, lex));
+            }
         } else if (phi instanceof MemoryPhiNode) {
             return phi.graph().addOrUnique(new MemoryProxyNode((MemoryKill) proxyInput, lex, ((MemoryPhiNode) phi).getLocationIdentity()));
         } else if (phi instanceof GuardPhiNode) {
@@ -777,6 +812,21 @@ public class LoopFragmentInside extends LoopFragment {
             if (state != null) {
                 duplicateState = state.duplicateWithVirtualState();
                 newExitMerge.setStateAfter(duplicateState);
+                /*
+                 * For complex phi cycles with floating nodes in between the phi and the state we
+                 * have to replace each node that is part of the new state with the respective node
+                 * in the duplicated region.
+                 */
+                duplicateState.applyToNonVirtual(new VirtualState.NodePositionClosure<>() {
+                    @Override
+                    public void apply(Node from, Position p) {
+                        Node usage = p.get(from);
+                        if (usage != null && !loopBegin.isPhiAtMerge(usage) && original().contains(usage)) {
+                            Node duplicated = getDuplicatedNode(usage);
+                            p.set(from, duplicated);
+                        }
+                    }
+                });
             }
             for (EndNode end : endsToMerge) {
                 newExitMerge.addForwardEnd(end);

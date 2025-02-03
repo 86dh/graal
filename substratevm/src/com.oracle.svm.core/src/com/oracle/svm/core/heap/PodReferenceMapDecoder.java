@@ -24,13 +24,10 @@
  */
 package com.oracle.svm.core.heap;
 
-import jdk.graal.compiler.api.directives.GraalDirectives;
-import jdk.graal.compiler.nodes.java.ArrayLengthNode;
-import jdk.graal.compiler.word.BarrieredAccess;
+import jdk.graal.compiler.word.Word;
 import org.graalvm.word.LocationIdentity;
 import org.graalvm.word.Pointer;
 import org.graalvm.word.UnsignedWord;
-import org.graalvm.word.WordFactory;
 
 import com.oracle.svm.core.AlwaysInline;
 import com.oracle.svm.core.JavaMemoryUtil;
@@ -42,6 +39,10 @@ import com.oracle.svm.core.hub.LayoutEncoding;
 import com.oracle.svm.core.jdk.UninterruptibleUtils;
 import com.oracle.svm.core.util.DuplicatedInNativeCode;
 import com.oracle.svm.core.util.UnsignedUtils;
+
+import jdk.graal.compiler.api.directives.GraalDirectives;
+import jdk.graal.compiler.nodes.java.ArrayLengthNode;
+import jdk.graal.compiler.word.BarrieredAccess;
 
 public final class PodReferenceMapDecoder {
     @DuplicatedInNativeCode
@@ -73,6 +74,7 @@ public final class PodReferenceMapDecoder {
         return true;
     }
 
+    @AlwaysInline("de-virtualize calls to ObjectReferenceVisitor")
     @Uninterruptible(reason = "Bridge between uninterruptible and potentially interruptible code.", mayBeInlined = true, calleeMustBe = false)
     private static boolean callVisitor(Pointer baseAddress, ObjectReferenceVisitor visitor, Object obj, boolean isCompressed, UnsignedWord refOffset) {
         return visitor.visitObjectReferenceInline(baseAddress.add(refOffset), 0, isCompressed, obj);
@@ -127,8 +129,8 @@ public final class PodReferenceMapDecoder {
         UnsignedWord nrefs;
         do {
             mapOffset = mapOffset.subtract(2);
-            gap = WordFactory.unsigned(Byte.toUnsignedInt(BarrieredAccess.readByte(copy, mapOffset)));
-            nrefs = WordFactory.unsigned(Byte.toUnsignedInt(BarrieredAccess.readByte(copy, mapOffset.add(1))));
+            gap = Word.unsigned(Byte.toUnsignedInt(BarrieredAccess.readByte(copy, mapOffset)));
+            nrefs = Word.unsigned(Byte.toUnsignedInt(BarrieredAccess.readByte(copy, mapOffset.add(1))));
 
             // Copy references separately with the required barriers
             JavaMemoryUtil.copyReferencesForward(original, refOffset, copy, refOffset, nrefs);

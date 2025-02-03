@@ -48,11 +48,6 @@ abstract class EspressoInstrumentableRootNodeImpl extends EspressoInstrumentable
     }
 
     @Override
-    boolean isTrivial() {
-        return false;
-    }
-
-    @Override
     public boolean canSplit() {
         return false;
     }
@@ -95,5 +90,10 @@ abstract class EspressoInstrumentableRootNodeImpl extends EspressoInstrumentable
             return true;
         }
         return false;
+    }
+
+    @Override
+    public String toString() {
+        return methodVersion.getDeclaringKlass().getType() + "." + methodVersion.getName() + methodVersion.getRawSignature();
     }
 }

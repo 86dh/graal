@@ -1,5 +1,5 @@
 #
-# Copyright (c) 2018, 2023, Oracle and/or its affiliates. All rights reserved.
+# Copyright (c) 2018, 2024, Oracle and/or its affiliates. All rights reserved.
 # DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
 #
 # The Universal Permissive License (UPL), Version 1.0
@@ -39,9 +39,9 @@
 # SOFTWARE.
 #
 suite = {
-  "mxversion": "6.53.2",
+  "mxversion": "7.36.5",
   "name" : "sdk",
-  "version" : "24.0.0",
+  "version" : "25.0.0",
   "release" : False,
   "sourceinprojectwhitelist" : [],
   "url" : "https://github.com/oracle/graal",
@@ -127,68 +127,68 @@ suite = {
     },
     "JLINE_READER": {
       "moduleName": "org.jline.reader",
-      "digest": "sha512:777733fa5d19f34386e4ff4ac578fb8ef3bbe160db5755dc551a5ec085dd3d966d74525be0e2d0c7bab222f03e09e28190cb5b263a92c63c6683a09332accf2e",
-      "sourceDigest": "sha512:a0f4c316c46f06ea30a6c6819d5c129dccc74b43fd8ba0380646feec89b61d0465a052645ca699211aab931daa1216b26de064ca2be9e16dfe842d2fd2a91404",
+      "digest": "sha512:dafd45af79a9874d7b41d146d37386da605e19ec2bf9c8989f121f9403902ce60ca9708fb016afed785186935d2dddd4b5b3304aca234c926b0e4368607b11ed",
+      "sourceDigest": "sha512:f8ec62508f3e83278156b7bd14d5daded72976b10da63adac53be2f7b1c5e6c69340fac5b2f10ffe7e92d86b27425beee73e5d5b3c775e72595b47158bfbed1b",
       "maven": {
         "groupId": "org.jline",
         "artifactId": "jline-reader",
-        "version": "3.23.0",
+        "version": "3.28.0",
       },
     },
 
     "JLINE_TERMINAL": {
       "moduleName": "org.jline.terminal",
-      "digest": "sha512:d0d96389d750d6de82f4d8a29fc3756c0f28c19f520e761db69c6668b1e3fc9c2add30aee86ab7ac10426f2c075a63a0e5f7537096591fe585d8836f25c692ed",
-      "sourceDigest": "sha512:931de13f023b9d15751c7e5b76ec9ad7811df19e7254146875ebd7e6d68e69764b916eef045ea743bd6d21515badeb1ddb795504d71ff1cad7e1b5889486c500",
+      "digest": "sha512:abe0ad0303e5eb81b549301dfdcf34aace14495240816f14302d193296c7a8be31488e468d18a215976b8e4e8fa29f72d830e492eed7d4a6f9f04c81a6e36c3c",
+      "sourceDigest": "sha512:cb70ad2bee2f7713fa5358c16fc7c53974c862e33957d3ec809468abcbc0b20de8546ecb41955dcc2003e702e5469069fd856a1ce51b132e29d0286beec4fe7e",
       "maven": {
         "groupId": "org.jline",
         "artifactId": "jline-terminal",
-        "version": "3.23.0",
+        "version": "3.28.0",
       },
     },
 
     "JLINE_BUILTINS": {
       "moduleName": "org.jline.builtins",
-      "digest": "sha512:166920f4252b4d6618a29aabc0e501930807c84df53cc727d238005aefc453b7c915345daa6653d281077e9dc25d3eb2f5a13ac9ceee1e230d9fd83b38113e32",
-      "sourceDigest": "sha512:9b1c2cf976044810ea12e7a4c2b9462b33ce36c36716a2029b171dd3f4151d1852320d3b08f21bf5e86f694f85d77ccd71bbef679764dfa393516f6e0e0bfa32",
+      "digest": "sha512:189d893405170a3edc624a6b822a8a394a2f8b623c23aed9e015d4b018b232307408b6038322719155fc7da7e9c04a9bb0a76c8521f49dd86a5f84ea3880acb6",
+      "sourceDigest": "sha512:33f06d7e2bb232ce413d8cf7234bdb416c3a6770dcf18a5c17e3889887b287378ff5fc531758143383c3f50b56613e5bf802b5c49a2a09b748c804568e0565b8",
       "maven": {
         "groupId": "org.jline",
         "artifactId": "jline-builtins",
-        "version": "3.23.0",
+        "version": "3.28.0",
       },
     },
     "LLVM_ORG" : {
-      "version" : "16.0.1-4-gad8c248269-bg39f02d0d6a",
+      "version" : "18.1.3-4-gd3f23e9e73-bg3b8289d0a4",
       "host" : "https://lafo.ssw.uni-linz.ac.at/pub/llvm-org",
       "os_arch" : {
         "linux" : {
           "amd64" : {
             "urls" : ["{host}/llvm-llvmorg-{version}-linux-amd64.tar.gz"],
-            "digest" : "sha512:fdef7aff621c533d30b89c15a3152dd2f6791c99317bb25295e4c9fc9e9b76a341174b55510c6a7e2df7e51be6aad473560927ee5e48605afa884a412147eb8c",
+            "digest" : "sha512:6ed66161ae39849d92ba13b16759e5c97a6a499bd61fce0a7516e9813e201a8142e8e98e13baac74150916b72a284850e0fff878ddc97017f63dc6c4f83f6004",
           },
           "aarch64" : {
             "urls" : ["{host}/llvm-llvmorg-{version}-linux-aarch64.tar.gz"],
-            "digest" : "sha512:3c15573d19cb84aab1aea9ac5e1052b24002d9d46109b496cdd2f3d605177c1592e7fed5a7ba0ee7de1c4aed91e0fdc50c53d5018d364c61f5792d7e8f00bb2c",
+            "digest" : "sha512:609ff4ccfb1249413a18656543d149bc3ed04d753ba2873ba82b75d50c4db9cbe47a60a33e63f479b20ec472957533b97bb279d7c9185fcdf6537aae85ac7ad7",
           },
           "riscv64": {
-            "urls" : ["{host}/llvm-llvmorg-16.0.1-4-gad8c248269-bge4d99266a2-linux-riscv64.tar.gz"],
-            "digest" : "sha512:9186a20d4b657f8a4c86c6730d713c6f8f223a8e9ecceb88d8b5cd3c072e8e0159b810663e57076c0ddcdcd57a819b35b42b543e6633f012175b5f78a6d8de92",
+            "urls" : ["{host}/llvm-llvmorg-{version}-linux-riscv64.tar.gz"],
+            "digest" : "sha512:e4ad54bef601c1ff3f75e63816590bf578180285316440ec6ed4a6a454323ac1f62e14630aee64b2d44654dbc7e7a2c1a868ca3a2d15c40a977d3f9b8a94d036",
           },
         },
         "darwin" : {
           "amd64" : {
             "urls" : ["{host}/llvm-llvmorg-{version}-darwin-amd64.tar.gz"],
-            "digest" : "sha512:ae96a72ddeecd4bdc972adae01e6894d47d54024f50b996aa9d8df1a683c4a5faab435cd2d94d5fa4c0764f0b2902dbc30171ad254e0da94888ddc0bd018d4f0",
+            "digest" : "sha512:26d827536104e06f4baf964dd8d999266d3a89442c658d4490bef412fd12dfaa3bc06d9f748531b280b121d88e1fd9ed53aba8d217bae7f8a6e60d0f10e842be",
           },
           "aarch64" : {
             "urls" : ["{host}/llvm-llvmorg-{version}-darwin-aarch64.tar.gz"],
-            "digest" : "sha512:9c57f30d5eed4162373ea9f342981843485dec5ebcefcf97f22e70e9af8a58167fc3eb3a383dfc9a00e061f58b8998fc063483b4f4e6ce5a74a0002f10a4e174",
+            "digest" : "sha512:741a2d007b9ce34d8f46e785d528cd116f3937bc2b403f68db405cfc272025d4b382ae234e2c0b3bba414e61abfc7a85aa8dfc6306cd274289bd1f10fb033e41",
           }
         },
         "windows" : {
           "amd64" : {
             "urls" : ["{host}/llvm-llvmorg-{version}-windows-amd64.tar.gz"],
-            "digest" : "sha512:12e95f2b3ea64a059e8b73c67f5a7da6e6b30a068da65acb73da4e86ab2a376065105c84ecb90a7f7e2c31628642aba07f2b738fe18122524184c7b517e36e04",
+            "digest" : "sha512:7e1e1eae6ea1218486c752a04356a516bc1fbba52b09235f64c8bec39d3287a7157ea5ffd9f09bf6172e1af976e691b373dbae6e4cadc512ce7e4d054d282848",
           }
         },
         "<others>": {
@@ -200,20 +200,167 @@ suite = {
       "license" : "Apache-2.0-LLVM",
     },
     "LLVM_ORG_COMPILER_RT_LINUX" : {
-      "version" : "16.0.1-4-gad8c248269-bg39f02d0d6a",
+      "version" : "18.1.3-4-gd3f23e9e73-bg3b8289d0a4",
       "host" : "https://lafo.ssw.uni-linz.ac.at/pub/llvm-org",
       # we really want linux-amd64, also on non-linux and non-amd64 platforms for cross-compilation
       "urls" : ["{host}/compiler-rt-llvmorg-{version}-linux-amd64.tar.gz"],
-      "digest" : "sha512:1520628266c4ca165fe299bcd7b7db087290f1a645bd41fc07779d771db0ba3308067f6caf9c39d7a76f3051023f481052035d78f598f40862bb91b462819afa",
+      "digest" : "sha512:15334c645908d9195893c3fada3c291a5c2dc93d02de797b117ee801df59bd0087835dc2862d97b2862136961e474cedc9d3f90bb94d54d27af66021372e5172",
       "license" : "Apache-2.0-LLVM",
     },
     "LLVM_ORG_SRC" : {
-      "version" : "16.0.1-4-gad8c248269-bg39f02d0d6a",
+      "version" : "18.1.3-4-gd3f23e9e73-bg3b8289d0a4",
       "host" : "https://lafo.ssw.uni-linz.ac.at/pub/llvm-org",
       "packedResource" : True,
       "urls" : ["{host}/llvm-src-llvmorg-{version}.tar.gz"],
-      "digest" : "sha512:1bb2f66cc123bb9f0263cd186a8ab7948939f181001e57a7171466534bc89c0ebb17863e90c487f48083f202745ea3d90275a3fa26d793fd2b9f1b62d7e1eabd",
+      "digest" : "sha512:7eb738373300c6c86acc081b9cd29e82c4f3ef4ebcf7ecd1b37e60346edbf0eb4b8edbc14d440a2f896966ed1f8824f940aca467f22630c81ee1403acefff2bd",
       "license" : "Apache-2.0-LLVM",
+    },
+    "MUSL_GCC_TOOLCHAIN" : {
+      "packedResource": True,
+      "os_arch": {
+        "linux": {
+          "amd64": {
+            "urls" : ["https://lafo.ssw.uni-linz.ac.at/pub/toolchain-gcc-musl/toolchain-gcc-10.2.1-musl-1.2.2-linux-amd64.tar.gz"],
+            "digest" : "sha512:8f49b04d4826c560c791e5223f504046fa0daa6b79e581ea1781a2d01f4efe2de4a0fb6771dc1b07318ab0109a61ea3b04255eadf36191a76687f873931eb283",
+          },
+          "aarch64": {
+            "urls" : ["https://lafo.ssw.uni-linz.ac.at/pub/toolchain-gcc-musl/toolchain-gcc-10.2.1-musl-1.2.2-linux-aarch64.tar.gz"],
+            "digest" : "sha512:f5545f6b36c2306861c026895d437a57357515e8dfefb0e8419413f61b146f42dc072f8a8a7a9f4885d6448396d656f59264e61e3f5eedd278486228aa58904e",
+          },
+          "<others>": {
+            "optional": True,
+          },
+        },
+        "<others>": {
+          "<others>": {
+            "optional": True,
+          }
+        }
+      },
+    },
+    "TIKA_1.0.11": {
+      "urls": ["https://lafo.ssw.uni-linz.ac.at/pub/graal-external-deps/tika-1.0.11.zip"],
+      "digest": "sha512:0d45935c428bb3226b0d22b8ea8a8f2eb9e145a72225c6320eeb7c7d1cebc644921f6b77d379a9356bfcbdb66e9daf351d2aef18ff47fa67dad2d5cb15def875",
+      "packedResource": True,
+    },
+
+    "MICRONAUT_MUSHOP_0.0.2" : {
+      "urls": ["https://lafo.ssw.uni-linz.ac.at/pub/graal-external-deps/mu-shop-0.0.2.zip"],
+      "digest": "sha512:e0a503423c1cf94611e9dc14c4d8f06ae25081745b3ebe47b91225c188713537a55c9281a865d1ada364fddaac7d17b90b7da728ccf3975e4d2f584d21bee550" ,
+      "packedResource": True
+    },
+
+    "QUARKUS_REGISTRY_0.0.2" : {
+      "urls": ["https://lafo.ssw.uni-linz.ac.at/pub/graal-external-deps/quarkus-registry-0.0.2.zip"],
+      "digest": "sha512:0b35bc8090514cdcb7471966858c8850bdc9132432fd392593a084c95af1d5b57ed8cd31969cf7bc94583c1973103fc3b7f5364fd5c7450335783f76cc9242aa" ,
+      "packedResource": True
+    },
+
+    "PETCLINIC_3.0.1": {
+      "urls": ["https://lafo.ssw.uni-linz.ac.at/pub/graal-external-deps/spring-petclinic-3.0.1.zip"],
+      "digest": "sha512:37d50049530ac23342a0e5adcf1c2a72b64312685ce407bc9dac577835d0df5e0548e72676e8a3a7bc670cf603d6b0c6e450f1ce8592f1f17681b6ddea602cda",
+      "packedResource": True,
+    },
+
+    "SHOPCART_0.3.10": {
+      "urls": ["https://lafo.ssw.uni-linz.ac.at/pub/graal-external-deps/shopcart-0.3.10.zip"],
+      "digest": "sha512:99099b4c013527c769b0c72637e5c450e1dfad7a847eddca453377260d3146cc091fe72f8ac6e93eb2a76290e85d9721ea7c964d0185fe82fca86f7175662bde",
+      "packedResource": True,
+    },
+
+    "SPRING_HW_3.0.6": {
+      "urls": ["https://lafo.ssw.uni-linz.ac.at/pub/graal-external-deps/spring-hello-world-3.0.6.zip"],
+      "digest": "sha512:15a7fd76e47af62b25f66be0b12020f068202ced3b5cb96e6aed8b23cd60a037595ebb1b843a2e123051c08a18b5348133bc419c2b1f94364d263c13b3268ee1",
+      "packedResource": True,
+    },
+
+    "QUARKUS_HW_1.0.6": {
+      "urls": ["https://lafo.ssw.uni-linz.ac.at/pub/graal-external-deps/quarkus-hello-world-1.0.6.zip"],
+      "digest": "sha512:c7678c9169dc6ba445fff8dbef7bc61579084c74eee4233d3deb3d56e73429b9cd894a3e98f7d8d7fe39b4f181b77ba916afa559a2f91de30a309fb9bdd5c56b",
+      "packedResource": True,
+    },
+
+    "MICRONAUT_HW_1.0.7": {
+      "urls": ["https://lafo.ssw.uni-linz.ac.at/pub/graal-external-deps/micronaut-hello-world-1.0.7.zip"],
+      "digest": "sha512:f4fdba567c055ed0190c73a96c746947091751bad6ccea75a5826d72acbbedfd66736259b7e3fb2fadbb645e88c92f6ac17948cb1b3a435407f20dc77e16a61e",
+      "packedResource": True,
+    },
+
+    "DACAPO" : {
+      "urls" : ["https://lafo.ssw.uni-linz.ac.at/pub/graal-external-deps/dacapo-9.12-bach-patched.jar"],
+      "digest" : "sha512:cd25bcc7d72d5ce3025413db6f256f4e37327b04c94fce823b25396421c5a77a6e2671ad2354b693bad908daa8cbc26c150eea98c0479a1e5a00b65ef7e57c2a",
+    },
+
+    "DACAPO_MR1_BACH" : {
+      "urls" : ["https://lafo.ssw.uni-linz.ac.at/pub/graal-external-deps/dacapo-9.12-MR1-bach.jar"],
+      "digest" : "sha512:09cab128f15ed13d49edb0f598be7e4426fefb87565bb10d522e6b1995543bf2c0810d8ce71f6847ebff072e35b0dbfd3137fc1a43d3c4db6cc9ae8852ec79cd",
+    },
+
+    "DACAPO_MR1_2baec49" : {
+      "urls" : ["https://lafo.ssw.uni-linz.ac.at/pub/graal-external-deps/dacapo-9.12-MR1-2baec49.jar"],
+      "digest" : "sha512:3707b0aee8b1f53828832a85d118981c9b0919c7c1f26dc86fd368d8092857a0b5b75cb5427fee791b0ea89bb7b60a66e2130f55a037c8b082235d3035d9e9cf",
+    },
+
+    "DACAPO_SCALA" : {
+      "urls" : ["https://lafo.ssw.uni-linz.ac.at/pub/graal-external-deps/dacapo-scala-0.1.0-20120216.jar"],
+      "digest" : "sha512:9a3908f3a0f2937bbc7edcd78f7e7e229bea8dee566d5f2d922bd4dc3c5b02cf97de294e479200372ff90bfbdf80e88dc7fc9fda9cb294088346e4a5ff28893e",
+    },
+
+    "DACAPO_D3S" : {
+      # original: https://d3s.mff.cuni.cz/software/benchmarking/files/dacapo-9.12-d3s.jar
+      "urls" : ["https://lafo.ssw.uni-linz.ac.at/pub/graal-external-deps/dacapo-9.12-d3s.jar"],
+      "digest" : "sha512:8a96e7ca560ba221169872006f61c4662464e13c2bd50f3a86d307b65de6a984dd72f2f7e316d188a2758121902be8a54e52b8e54d7d04f3ea46eefb6898b94a",
+    },
+
+    "RENAISSANCE_0.14.1" : {
+      "urls" : ["https://lafo.ssw.uni-linz.ac.at/pub/graal-external-deps/renaissance/renaissance-gpl-0.14.1.jar"],
+      "digest" : "sha512:75dcb0e7891eca287c4ee575ee02e14a97e281bc680499ac313928a13f95ee3638f17d591c3c67b89f12b49b4fe5efb6a64d3fa0bb1670bf5d982c7e7081894f",
+    },
+
+    "RENAISSANCE_0.15.0" : {
+      "urls" : ["https://lafo.ssw.uni-linz.ac.at/pub/graal-external-deps/renaissance/renaissance-gpl-0.15.0.jar"],
+      "digest" : "sha512:2682ac2dd133efb143352fc571671859980044565470188ea26a95926132f43477686fe321f012f7af9ba5f4022b797e4b7591f63bb12450a80f820456a54ac2",
+    },
+
+    "RENAISSANCE_0.16.0" : {
+      "urls" : ["https://lafo.ssw.uni-linz.ac.at/pub/graal-external-deps/renaissance/renaissance-gpl-0.16.0.jar"],
+      "digest" : "sha512:82cc829636f3420622b9ce55fb0406230a2a90692f03f0e85bfe6d99f1bd58ee9ec173695bd1c597aeae149b19391231d0f7fe47ca290334b2dba7c7cd3ef64e",
+    },
+
+    "UBENCH_AGENT_DIST" : {
+      "urls" : ["https://lafo.ssw.uni-linz.ac.at/pub/graal-external-deps/java-ubench-agent-2e5becaf97afcf64fd8aef3ac84fc05a3157bff5.zip"],
+      "digest" : "sha512:5ec1781aaceb3c1c6123e6db52a49967399f42ac9c81ef87e2abdf7b8d4a8cd0dac6b8e31e9a57ee0e890b15e1a9326a4a3e44e742f9aa1cba7836361c50b921",
+    },
+
+    # Required to run SPECJBB2015 on JDK >=11
+    "ACTIVATION_1.1.1" : {
+      "digest" : "sha512:49119b0cc3af02700685a55c6f15e6d40643f81640e642b9ea39a59e18d542f8837d30b43b5be006ce1a98c8ec9729bb2165c0442978168f64caa2fc6e3cb93d",
+      "maven" : {
+        "groupId" : "javax.activation",
+        "artifactId" : "activation",
+        "version" : "1.1.1",
+      },
+    },
+    "JAXB_API_2.1" : {
+      "digest" : "sha512:8cf015e64a33b6f6076259f09da1262efebc772d9d94764027a02d57a891a0f5fb9c2dcaab748f6cb6a29ab107ba0f3ad106d815bdb69f72786d30e25951a15f",
+      "maven" : {
+        "groupId" : "javax.xml.bind",
+        "artifactId" : "jaxb-api",
+        "version" : "2.1",
+      },
+    },
+    "JAXB_IMPL_2.1.17" : {
+      "digest" : "sha512:a60c4750b56acd60d0ea78c5d0be7abf6618abe44ab846f2388594fedb78a96222d1e998d42adfbd6ade666f2c8128373af88f73967ff46965f855a31a27b588",
+      "maven" : {
+        "groupId" : "com.sun.xml.bind",
+        "artifactId" : "jaxb-impl",
+        "version" : "2.1.17",
+      },
+      "dependencies": ["JAXB_API_2.1", "ACTIVATION_1.1.1"]
+    },
+    "AWFY_1.1" : {
+      "urls" : ["https://lafo.ssw.uni-linz.ac.at/pub/graal-external-deps/awfy/awfy-770c6649.jar"],
+      "digest" : "sha512:ecd9beb26b845fe9635399ed58a4f1098ca842525d2f89b0f1cf1c3580c0c163a342edb9d9685f43503792d450955dc7822c5d07d627baf1814b0e10695a6fa5",
     },
   },
   "projects" : {
@@ -237,27 +384,10 @@ suite = {
       "requires" : [
         "java.logging",
       ],
-      "annotationProcessors" : [
-          "sdk:POLYGLOT_PROCESSOR"
-      ],
       "checkstyle" : "org.graalvm.word",
       "javaCompliance" : "17+",
       "workingSets" : "API,SDK",
-    },
-    "org.graalvm.polyglot.processor" : {
-      "subDir" : "src",
-      "sourceDirs" : ["src"],
-      "dependencies" : [
-          "NATIVEBRIDGE_PROCESSOR"
-      ],
-      "requires" : [
-        "java.compiler"
-      ],
-      "annotationProcessors" : [
-      ],
-      "checkstyle" : "org.graalvm.word",
-      "javaCompliance" : "17+",
-      "workingSets" : "API,Graal",
+      "graalCompilerSourceEdition": "ignore",
     },
     "org.graalvm.sdk" : {
       "subDir" : "src",
@@ -270,6 +400,7 @@ suite = {
       "checkstyle" : "org.graalvm.word",
       "javaCompliance" : "17+",
       "workingSets" : "API,SDK",
+      "graalCompilerSourceEdition": "ignore",
     },
 
     "org.graalvm.word" : {
@@ -278,8 +409,21 @@ suite = {
       "dependencies" : [],
       "checkstyle" : "org.graalvm.word",
       "javaCompliance" : "11+",
-      "checkstyleVersion" : "10.7.0",
+      "checkstyleVersion" : "10.21.0",
       "workingSets" : "API,SDK",
+    },
+
+    "org.graalvm.word.test" : {
+      "subDir" : "src",
+      "sourceDirs" : ["src"],
+      "dependencies" : [
+        "mx:JUNIT",
+        "org.graalvm.word"
+      ],
+      "javaCompliance" : "21+",
+      "workingSets" : "SDK",
+      "checkstyle" : "org.graalvm.word",
+      "graalCompilerSourceEdition": "ignore",
     },
 
     "org.graalvm.nativeimage" : {
@@ -312,6 +456,7 @@ suite = {
       "javaCompliance" : "17+",
       "workingSets" : "SDK",
       "checkstyle" : "org.graalvm.word",
+      "graalCompilerSourceEdition": "ignore",
     },
     "org.graalvm.launcher" : {
       "subDir" : "src",
@@ -329,6 +474,7 @@ suite = {
       "javaCompliance" : "17+",
       "workingSets" : "Truffle,Tools",
       "checkstyle" : "org.graalvm.word",
+      "graalCompilerSourceEdition": "ignore",
     },
     "org.graalvm.launcher.test" : {
       "subDir" : "src",
@@ -340,6 +486,7 @@ suite = {
       "javaCompliance" : "17+",
       "workingSets" : "Truffle,Tools,Test",
       "checkstyle" : "org.graalvm.word",
+      "graalCompilerSourceEdition": "ignore",
     },
     "org.graalvm.polyglot.tck" : {
       "subDir" : "src",
@@ -350,6 +497,7 @@ suite = {
       "checkstyle" : "org.graalvm.word",
       "javaCompliance" : "17+",
       "workingSets" : "API,SDK,Test",
+      "graalCompilerSourceEdition": "ignore",
     },
     "org.graalvm.collections" : {
       "subDir" : "src",
@@ -368,6 +516,7 @@ suite = {
       "checkstyle" : "org.graalvm.word",
       "javaCompliance" : "17+",
       "workingSets" : "API,SDK,Test",
+      "graalCompilerSourceEdition": "ignore",
     },
     "org.graalvm.home" : {
       "subDir" : "src",
@@ -378,6 +527,7 @@ suite = {
       "checkstyle" : "org.graalvm.word",
       "javaCompliance" : "11+",
       "workingSets" : "API,SDK",
+      "graalCompilerSourceEdition": "ignore",
     },
     "org.graalvm.home.test" : {
       "subDir" : "src",
@@ -389,6 +539,7 @@ suite = {
       "checkstyle" : "org.graalvm.word",
       "javaCompliance" : "17+",
       "workingSets" : "API,SDK",
+      "graalCompilerSourceEdition": "ignore",
     },
     "org.graalvm.jniutils" : {
       "subDir" : "src",
@@ -441,11 +592,13 @@ suite = {
       "workingSets" : "Graal,Test",
       "jacoco" : "exclude",
       "testProject" : True,
+      "graalCompilerSourceEdition": "ignore",
     },
     "org.graalvm.toolchain.test" : {
       "class" : "ToolchainTestProject",
       "subDir" : "src",
       "buildDependencies" : ["LLVM_TOOLCHAIN"],
+      "graalCompilerSourceEdition": "ignore",
     },
     "org.graalvm.shadowed.org.jline": {
       # shaded JLINE_*
@@ -505,6 +658,12 @@ suite = {
             "JLineNativeLoader.initialize\\(\\);": "",
             "return JLineLibrary.newFileDescriptor\\(fd\\);": "throw new RuntimeException(\"not implemented\");",
           },
+          "org/jline/terminal/impl/exec/ExecTerminalProvider.java": {
+            "import org.graalvm.shadowed.org.jline.nativ.JLineLibrary;": "",
+            "import org.graalvm.shadowed.org.jline.nativ.JLineNativeLoader;": "",
+            "JLineNativeLoader.initialize\\(\\);": "",
+            "return JLineLibrary.newRedirectPipe\\(fd\\);": "throw new RuntimeException(\"not implemented\");",
+          },
           # Hard-coded list of terminal providers replaces a generic reflection based mechanism that
           # looks up the provider class names in the resources
           "org/jline/terminal/spi/TerminalProvider.java": {
@@ -534,6 +693,7 @@ suite = {
       "noMavenJavadoc": True,
       "javac.lint.overrides": 'none',
       "jacoco": "exclude",
+      "graalCompilerSourceEdition": "ignore",
     },
     "org.graalvm.maven.downloader" : {
       "subDir" : "src",
@@ -547,6 +707,7 @@ suite = {
         "java.logging",
         "java.xml",
       ],
+      "graalCompilerSourceEdition": "ignore",
     },
   },
   "licenses" : {
@@ -623,6 +784,7 @@ suite = {
       "maven": {
           "tag": ["default", "public"],
       },
+      "graalCompilerSourceEdition": "ignore",
     },
 
     "NATIVEIMAGE" : {
@@ -667,12 +829,13 @@ suite = {
       },
     },
 
-    "POLYGLOT_PROCESSOR" : {
-      "subDir" : "src",
-      "dependencies" : [
-        "org.graalvm.polyglot.processor"
-      ],
-      "distDependencies" : ["sdk:NATIVEBRIDGE_PROCESSOR"],
+    "POLYGLOT_VERSION": {
+      "type": "dir",
+      "platformDependent": False,
+      "layout": {
+        "META-INF/graalvm/org.graalvm.polyglot/version": "dependency:VERSION/version",
+      },
+      "description": "Polyglot version.",
       "maven": False,
     },
 
@@ -681,8 +844,12 @@ suite = {
       "dependencies" : [
         "org.graalvm.polyglot",
         "org.graalvm.home",
+        "POLYGLOT_VERSION",
       ],
-      "distDependencies" : ["COLLECTIONS", "NATIVEIMAGE"],
+      "distDependencies" : [
+        "COLLECTIONS",
+        "NATIVEIMAGE",
+      ],
       "javadocType": "api",
       "moduleInfo" : {
         "name" : "org.graalvm.polyglot",
@@ -691,12 +858,6 @@ suite = {
             "org.graalvm.word",
             "org.graalvm.nativeimage",
             "org.graalvm.collections",
-            # needed for dynamically loading Truffle
-            "java.sql",
-            "java.management",
-            "jdk.unsupported",
-            "jdk.management",
-            "jdk.jfr",
         ],
         "exports" : [
           "org.graalvm.home",
@@ -720,7 +881,8 @@ suite = {
         "groupId" : "org.graalvm.polyglot",
         "artifactId" : "polyglot",
         "tag": ["default", "public"],
-      }
+      },
+      "graalCompilerSourceEdition": "ignore",
     },
 
     "COLLECTIONS" : {
@@ -768,6 +930,15 @@ suite = {
       },
     },
 
+    "MAVEN_DOWNLOADER_VERSION": {
+      "type": "dir",
+      "platformDependent": False,
+      "layout": {
+        "META-INF/graalvm/org.graalvm.maven.downloader/version": "dependency:sdk:VERSION/version",
+      },
+      "description": "Maven downloader version.",
+      "maven": False,
+    },
     "MAVEN_DOWNLOADER": {
       "moduleInfo" : {
         "name" : "org.graalvm.maven.downloader",
@@ -778,6 +949,7 @@ suite = {
       "mainClass": "org.graalvm.maven.downloader.Main",
       "dependencies": [
         "org.graalvm.maven.downloader",
+        "MAVEN_DOWNLOADER_VERSION",
       ],
       "distDependencies": [
         "sdk:NATIVEIMAGE",
@@ -788,11 +960,13 @@ suite = {
       "maven": {
         "tag": ["default", "public"],
       },
+      "graalCompilerSourceEdition": "ignore",
     },
 
     "SDK_TEST" : {
       "subDir" : "src",
       "dependencies" : [
+        "org.graalvm.word.test",
         "org.graalvm.collections.test",
         "org.graalvm.nativeimage.test",
         "org.graalvm.launcher.test",
@@ -803,9 +977,11 @@ suite = {
         "sdk:POLYGLOT",
         "sdk:NATIVEIMAGE",
         "sdk:COLLECTIONS",
+        "sdk:WORD",
         "sdk:LAUNCHER_COMMON"
       ],
       "maven" : False,
+      "graalCompilerSourceEdition": "ignore",
     },
     "JLINE3": {
       # shaded JLINE_*
@@ -822,6 +998,7 @@ suite = {
           "org.graalvm.shadowed.org.jline.reader.impl.history",
           "org.graalvm.shadowed.org.jline.terminal",
           "org.graalvm.shadowed.org.jline.terminal.impl",
+          "org.graalvm.shadowed.org.jline.terminal.impl.exec",
           "org.graalvm.shadowed.org.jline.terminal.spi",
           "org.graalvm.shadowed.org.jline.utils",
         ],
@@ -841,6 +1018,7 @@ suite = {
         "artifactId": "jline",
         "tag": ["default", "public"],
       },
+      "graalCompilerSourceEdition": "ignore",
     },
     "LAUNCHER_COMMON" : {
       "subDir" : "src",
@@ -849,12 +1027,18 @@ suite = {
         "exports" : [
           "org.graalvm.launcher",
         ],
+        "requires" : [
+          "org.graalvm.collections",
+          "org.graalvm.nativeimage",
+        ],
       },
       "dependencies" : [
         "org.graalvm.launcher",
       ],
       "distDependencies" : [
-        "sdk:COLLECTIONS", "sdk:POLYGLOT",
+        "sdk:COLLECTIONS",
+        "sdk:NATIVEIMAGE",
+        "sdk:POLYGLOT",
         "JLINE3",
       ],
       "description" : "Common infrastructure to create language launchers using the Polyglot API.",
@@ -862,6 +1046,7 @@ suite = {
       "maven": {
           "tag": ["default", "public"],
       },
+      "graalCompilerSourceEdition": "ignore",
     },
     "POLYGLOT_TCK" : {
       "subDir" : "src",
@@ -875,7 +1060,8 @@ suite = {
         "org.graalvm.polyglot.tck",
       ],
       "distDependencies" : [
-        "sdk:COLLECTIONS", "sdk:POLYGLOT",
+        "sdk:COLLECTIONS",
+        "sdk:POLYGLOT",
       ],
       "javadocType": "api",
       "description" : """GraalVM TCK SPI""",
@@ -883,6 +1069,7 @@ suite = {
       "maven": {
           "tag": ["default", "public"],
       },
+      "graalCompilerSourceEdition": "ignore",
     },
     "JNIUTILS" : {
       "moduleInfo" : {
@@ -905,6 +1092,10 @@ suite = {
         "name" : "org.graalvm.nativebridge",
         "exports" : [
           "org.graalvm.nativebridge",
+        ],
+        "requires": [
+          "org.graalvm.collections",
+          "org.graalvm.nativeimage",
         ],
       },
       "subDir" : "src",
@@ -940,6 +1131,7 @@ suite = {
       },
       "maven": False,
       "testDistribution" : True,
+      "graalCompilerSourceEdition": "ignore",
     },
     "LLVM_TOOLCHAIN": {
       "native": True,
@@ -1058,6 +1250,7 @@ suite = {
       "platformDependent" : True,
       "maven": False,
       "license" : "Apache-2.0-LLVM",
+      "graalCompilerSourceEdition": "ignore",
     },
     "LLVM_TOOLCHAIN_FULL": {
       "description": "Distribution including all of LLVM. Use only for building/testing. Only the content of LLVM_TOOLCHAIN will be included in the llvm-toolchain installable.",
@@ -1076,6 +1269,7 @@ suite = {
       "maven": False,
       "license" : "Apache-2.0-LLVM",
       "defaultBuild" : False,
+      "graalCompilerSourceEdition": "ignore",
     },
     "LLVM_NINJA_TOOLCHAIN": {
       "native": True,
@@ -1090,6 +1284,8 @@ include <ninja-toolchain:GCC_NINJA_TOOLCHAIN>
 CC=<path:LLVM_TOOLCHAIN>/bin/clang
 CXX=<path:LLVM_TOOLCHAIN>/bin/clang++
 AR=<path:LLVM_TOOLCHAIN>/bin/llvm-ar
+CFLAGS=
+CXXFLAGS=
 LDFLAGS=-fuse-ld=lld
 '''
             },
@@ -1107,6 +1303,9 @@ include <ninja-toolchain:GCC_NINJA_TOOLCHAIN>
 CC=xcrun <path:LLVM_TOOLCHAIN>/bin/clang
 CXX=xcrun <path:LLVM_TOOLCHAIN>/bin/clang++
 AR=xcrun <path:LLVM_TOOLCHAIN>/bin/llvm-ar
+CFLAGS=
+CXXFLAGS=
+LDFLAGS=
 '''
             },
           },
@@ -1124,6 +1323,9 @@ CL=<path:LLVM_TOOLCHAIN>\\bin\\clang-cl
 LINK=<path:LLVM_TOOLCHAIN>\\bin\\lld-link
 LIB=<path:LLVM_TOOLCHAIN>\\bin\\llvm-lib
 ML=<path:LLVM_TOOLCHAIN>\\bin\\llvm-ml
+CFLAGS=
+CXXFLAGS=
+LDFLAGS=
 '''
             },
           },
@@ -1136,6 +1338,121 @@ ML=<path:LLVM_TOOLCHAIN>\\bin\\llvm-ml
         "LLVM_TOOLCHAIN",
         "org.graalvm.toolchain.test",
       ],
+      "graalCompilerSourceEdition": "ignore",
+    },
+    "MUSL_NINJA_TOOLCHAIN" : {
+      "native" : True,
+      "platformDependent" : True,
+      "native_toolchain" : {
+        "kind": "ninja",
+        "target": {
+          # host os/arch
+          "libc": "musl",
+        },
+      },
+      "os_arch": {
+        "linux": {
+          "amd64": {
+            "layout" : {
+              "toolchain.ninja" : {
+                "source_type": "string",
+                "value": '''
+include <ninja-toolchain:GCC_NINJA_TOOLCHAIN>
+CC=<path:MUSL_GCC_TOOLCHAIN>/x86_64-linux-musl-native/bin/gcc
+CXX=<path:MUSL_GCC_TOOLCHAIN>/x86_64-linux-musl-native/bin/g++
+AR=<path:MUSL_GCC_TOOLCHAIN>/x86_64-linux-musl-native/bin/ar
+CFLAGS=
+CXXFLAGS=
+LDFLAGS=
+'''
+              },
+            },
+            "dependencies": [
+              "MUSL_GCC_TOOLCHAIN",
+              "mx:GCC_NINJA_TOOLCHAIN",
+            ],
+          },
+          "aarch64": {
+            "layout" : {
+              "toolchain.ninja" : {
+                "source_type": "string",
+                "value": '''
+include <ninja-toolchain:GCC_NINJA_TOOLCHAIN>
+CC=<path:MUSL_GCC_TOOLCHAIN>/aarch64-linux-musl-native/bin/gcc
+CXX=<path:MUSL_GCC_TOOLCHAIN>/aarch64-linux-musl-native/bin/g++
+AR=<path:MUSL_GCC_TOOLCHAIN>/aarch64-linux-musl-native/bin/ar
+CFLAGS=
+CXXFLAGS=
+LDFLAGS=
+'''
+              },
+            },
+            "dependencies": [
+              "MUSL_GCC_TOOLCHAIN",
+              "mx:GCC_NINJA_TOOLCHAIN",
+            ],
+          },
+        },
+        "<others>": {
+          "<others>": {
+            "optional": True,
+          }
+        },
+      },
+      "maven" : False,
+      "graalCompilerSourceEdition": "ignore",
+    },
+    "MUSL_CMAKE_TOOLCHAIN" : {
+      "native" : True,
+      "platformDependent" : True,
+      "native_toolchain" : {
+        "kind": "cmake",
+        "target": {
+          # host os/arch
+          "libc": "musl",
+        },
+      },
+      "os_arch": {
+        "linux": {
+          "amd64": {
+            "layout" : {
+              "toolchain.cmake" : {
+                "source_type": "string",
+                "value": '''
+set(CMAKE_C_COMPILER   <path:MUSL_GCC_TOOLCHAIN>/x86_64-linux-musl-native/bin/gcc)
+set(CMAKE_CXX_COMPILER <path:MUSL_GCC_TOOLCHAIN>/x86_64-linux-musl-native/bin/g++)
+set(CMAKE_AR           <path:MUSL_GCC_TOOLCHAIN>/x86_64-linux-musl-native/bin/ar)
+'''
+              },
+            },
+            "dependencies": [
+              "MUSL_GCC_TOOLCHAIN",
+            ],
+          },
+          "aarch64": {
+            "layout" : {
+              "toolchain.cmake" : {
+                "source_type": "string",
+                "value": '''
+set(CMAKE_C_COMPILER   <path:MUSL_GCC_TOOLCHAIN>/aarch64-linux-musl-native/bin/gcc)
+set(CMAKE_CXX_COMPILER <path:MUSL_GCC_TOOLCHAIN>/aarch64-linux-musl-native/bin/g++)
+set(CMAKE_AR           <path:MUSL_GCC_TOOLCHAIN>/aarch64-linux-musl-native/bin/ar)
+'''
+              },
+            },
+            "dependencies": [
+              "MUSL_GCC_TOOLCHAIN",
+            ],
+          },
+        },
+        "<others>": {
+          "<others>": {
+            "optional": True,
+          }
+        },
+      },
+      "maven" : False,
+      "graalCompilerSourceEdition": "ignore",
     },
   },
 }

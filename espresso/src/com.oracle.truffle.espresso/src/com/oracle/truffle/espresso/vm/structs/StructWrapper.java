@@ -20,7 +20,6 @@
  * or visit www.oracle.com if you need additional information or have any
  * questions.
  */
-
 package com.oracle.truffle.espresso.vm.structs;
 
 import static com.oracle.truffle.espresso.ffi.NativeType.BOOLEAN;
@@ -36,7 +35,6 @@ import com.oracle.truffle.espresso.ffi.NativeAccess;
 import com.oracle.truffle.espresso.ffi.RawPointer;
 import com.oracle.truffle.espresso.ffi.nfi.NativeUtils;
 import com.oracle.truffle.espresso.jni.JNIHandles;
-import com.oracle.truffle.espresso.jni.JniEnv;
 import com.oracle.truffle.espresso.runtime.staticobject.StaticObject;
 import com.oracle.truffle.espresso.vm.structs.GenerateStructs.KnownStruct;
 
@@ -51,7 +49,7 @@ import com.oracle.truffle.espresso.vm.structs.GenerateStructs.KnownStruct;
  * the processor will generate two classes for each of them:
  * <ul>
  * <li>A {@link StructStorage storage class} to store the size of the struct, and the offsets of
- * each struct member. It also provides a {@link StructStorage#wrap(JniEnv, TruffleObject) wrap}
+ * each struct member. It also provides a {@link StructStorage#wrap(JNIHandles, TruffleObject)}
  * method, that returns an instance of {@link StructWrapper this class}. These classes are intended
  * to be per-context singletons.</li>
  * <li>A {@link StructWrapper wrapper class}, as described above. This generated class will also
@@ -82,28 +80,6 @@ import com.oracle.truffle.espresso.vm.structs.GenerateStructs.KnownStruct;
                                                 INT,
                                                 POINTER,
                                                 OBJECT,
-                                }),
-                /*-
-                 * struct jdk_version_info {
-                 *     unsigned int jdk_version; // <- The only one we are interested in.
-                 *     unsigned int update_version : 8;
-                 *     unsigned int special_update_version : 8;
-                 *     unsigned int reserved1 : 16;
-                 *     unsigned int reserved2;
-                 *     unsigned int thread_park_blocker : 1;
-                 *     unsigned int post_vm_init_hook_enabled : 1;
-                 *     unsigned int pending_list_uses_discovered_field : 1;
-                 *     unsigned int : 29;
-                 *     unsigned int : 32;
-                 *     unsigned int : 32;
-                 * };
-                 */
-                @KnownStruct(structName = "jdk_version_info", //
-                                memberNames = {
-                                                "jdk_version",
-                                }, //
-                                types = {
-                                                INT,
                                 }),
                 /*-
                  * struct member_info {
@@ -758,9 +734,8 @@ public abstract class StructWrapper {
         nativeAccess.freeMemory(pointer);
     }
 
-    protected StructWrapper(JniEnv jni, TruffleObject pointer, long capacity) {
-        this.handles = jni.getHandles();
-
+    protected StructWrapper(JNIHandles handles, TruffleObject pointer, long capacity) {
+        this.handles = handles;
         this.pointer = pointer;
         this.buffer = NativeUtils.directByteBuffer(pointer, capacity);
     }

@@ -25,6 +25,10 @@
  */
 package com.oracle.svm.hosted;
 
+import static com.oracle.svm.shaded.org.objectweb.asm.Opcodes.ACC_FINAL;
+import static com.oracle.svm.shaded.org.objectweb.asm.Opcodes.ACC_PUBLIC;
+import static com.oracle.svm.shaded.org.objectweb.asm.Opcodes.ACC_STATIC;
+
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.URI;
@@ -32,30 +36,50 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.stream.Collectors;
 
 import org.graalvm.nativeimage.ImageSingletons;
+import org.graalvm.nativeimage.hosted.Feature;
 import org.graalvm.nativeimage.hosted.RuntimeClassInitialization;
 
+import com.oracle.graal.pointsto.meta.AnalysisType;
 import com.oracle.svm.core.configure.ConfigurationFile;
 import com.oracle.svm.core.configure.ConfigurationFiles;
 import com.oracle.svm.core.configure.PredefinedClassesConfigurationParser;
 import com.oracle.svm.core.configure.PredefinedClassesRegistry;
+import com.oracle.svm.core.feature.AutomaticallyRegisteredFeature;
 import com.oracle.svm.core.feature.InternalFeature;
 import com.oracle.svm.core.hub.PredefinedClassesSupport;
-import com.oracle.svm.core.feature.AutomaticallyRegisteredFeature;
 import com.oracle.svm.core.util.UserError;
 import com.oracle.svm.core.util.VMError;
 import com.oracle.svm.hosted.FeatureImpl.AfterRegistrationAccessImpl;
 import com.oracle.svm.hosted.config.ConfigurationParserUtils;
+import com.oracle.svm.hosted.reflect.ReflectionFeature;
+import com.oracle.svm.shaded.org.objectweb.asm.ClassReader;
+import com.oracle.svm.shaded.org.objectweb.asm.ClassVisitor;
+import com.oracle.svm.shaded.org.objectweb.asm.ClassWriter;
+import com.oracle.svm.shaded.org.objectweb.asm.FieldVisitor;
+import com.oracle.svm.shaded.org.objectweb.asm.MethodVisitor;
+import com.oracle.svm.shaded.org.objectweb.asm.Opcodes;
 
-import jdk.internal.org.objectweb.asm.ClassReader;
-import jdk.internal.org.objectweb.asm.ClassWriter;
+import jdk.graal.compiler.java.LambdaUtils;
+import jdk.graal.compiler.util.Digest;
 
 @AutomaticallyRegisteredFeature
 public class ClassPredefinitionFeature implements InternalFeature {
     private final Map<String, PredefinedClass> nameToRecord = new HashMap<>();
     private boolean sealed = false;
+
+    @Override
+    public List<Class<? extends Feature>> getRequiredFeatures() {
+        /*
+         * We are registering all predefined lambda classes for reflection. If the reflection
+         * feature is not executed before this feature, class RuntimeReflectionSupport won't be
+         * present in the ImageSingletons.
+         */
+        return List.of(ReflectionFeature.class);
+    }
 
     @Override
     public void afterRegistration(AfterRegistrationAccess arg) {
@@ -76,6 +100,14 @@ public class ClassPredefinitionFeature implements InternalFeature {
 
     @Override
     public void beforeAnalysis(BeforeAnalysisAccess access) {
+        FeatureImpl.BeforeAnalysisAccessImpl impl = (FeatureImpl.BeforeAnalysisAccessImpl) access;
+        PredefinedClassesSupport support = ImageSingletons.lookup(PredefinedClassesSupport.class);
+        support.setRegistrationValidator(clazz -> {
+            Optional<AnalysisType> analysisType = impl.getMetaAccess().optionalLookupJavaType(clazz);
+            analysisType.map(impl.getHostVM()::dynamicHub).ifPresent(
+                            hub -> VMError.guarantee(hub.isLoaded(), "Classes that should be predefined must not have a class loader."));
+        });
+
         sealed = true;
 
         List<String> skipped = new ArrayList<>();
@@ -118,7 +150,7 @@ public class ClassPredefinitionFeature implements InternalFeature {
         }
     }
 
-    private class PredefinedClassesRegistryImpl implements PredefinedClassesRegistry {
+    private final class PredefinedClassesRegistryImpl implements PredefinedClassesRegistry {
         @Override
         public void add(String nameInfo, String providedHash, URI baseUri) {
             if (!PredefinedClassesSupport.supportsBytecodes()) {
@@ -133,8 +165,20 @@ public class ClassPredefinitionFeature implements InternalFeature {
                 try (InputStream in = PredefinedClassesConfigurationParser.openClassdataStream(baseUri, providedHash)) {
                     data = in.readAllBytes();
                 }
+
                 // Compute our own hash code, the files could have been messed with.
-                String hash = PredefinedClassesSupport.hash(data, 0, data.length);
+                String hash = Digest.digest(data);
+
+                if (LambdaUtils.isLambdaClassName(nameInfo)) {
+                    /**
+                     * We have to cut off calculated hash since lambda's name in the bytecode does
+                     * not contain it. Also, the name in the bytecode must match the name we load
+                     * class with, so we have to update it in the bytecode.
+                     */
+                    data = PredefinedClassesSupport.changeLambdaClassName(data, nameInfo.substring(0, nameInfo.indexOf(LambdaUtils.LAMBDA_CLASS_NAME_SUBSTRING) +
+                                    LambdaUtils.LAMBDA_CLASS_NAME_SUBSTRING.length()), nameInfo);
+                    data = makeLambdaInstanceFieldAndConstructorPublic(data);
+                }
 
                 /*
                  * Compute a "canonical hash" that does not incorporate debug information such as
@@ -144,7 +188,7 @@ public class ClassPredefinitionFeature implements InternalFeature {
                 ClassWriter writer = new ClassWriter(0);
                 reader.accept(writer, ClassReader.SKIP_DEBUG);
                 byte[] canonicalData = writer.toByteArray();
-                String canonicalHash = PredefinedClassesSupport.hash(canonicalData, 0, canonicalData.length);
+                String canonicalHash = Digest.digest(canonicalData);
 
                 String className = transformClassName(reader.getClassName());
                 PredefinedClass record = nameToRecord.computeIfAbsent(className, PredefinedClass::new);
@@ -279,5 +323,35 @@ public class ClassPredefinitionFeature implements InternalFeature {
             }
             pendingSupertypes.add(record);
         }
+    }
+
+    /**
+     * We need to make field LAMBDA_INSTANCE$ and lambda class constructor public in order to be
+     * able to predefine lambda classes so that {@code java.lang.invoke.InnerClassLambdaMetafactory}
+     * can access them.
+     */
+    private static byte[] makeLambdaInstanceFieldAndConstructorPublic(byte[] classBytes) {
+        ClassReader cr = new ClassReader(classBytes);
+        ClassWriter cw = new ClassWriter(cr, 0);
+
+        cr.accept(new ClassVisitor(Opcodes.ASM5, cw) {
+            @Override
+            public FieldVisitor visitField(int access, String name, String descriptor, String signature, Object value) {
+                if (name.equals("LAMBDA_INSTANCE$")) {
+                    return super.visitField(ACC_PUBLIC | ACC_STATIC | ACC_FINAL, name, descriptor, signature, value);
+                }
+                return super.visitField(access, name, descriptor, signature, value);
+            }
+
+            @Override
+            public MethodVisitor visitMethod(final int access, final String name, final String descriptor, final String signature, final String[] exceptions) {
+                if (name.equals("<init>")) {
+                    return super.visitMethod(ACC_PUBLIC, name, descriptor, signature, exceptions);
+                }
+                return super.visitMethod(access, name, descriptor, signature, exceptions);
+            }
+        }, 0);
+
+        return cw.toByteArray();
     }
 }

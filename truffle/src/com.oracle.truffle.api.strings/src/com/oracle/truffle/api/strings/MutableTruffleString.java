@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2021, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -40,13 +40,6 @@
  */
 package com.oracle.truffle.api.strings;
 
-import static com.oracle.truffle.api.strings.TStringGuards.isStride0;
-import static com.oracle.truffle.api.strings.TStringGuards.isStride1;
-import static com.oracle.truffle.api.strings.TStringGuards.isStride2;
-import static com.oracle.truffle.api.strings.TStringGuards.isUTF16;
-import static com.oracle.truffle.api.strings.TStringGuards.isUTF32;
-import static com.oracle.truffle.api.strings.TStringGuards.isUTF8;
-
 import java.util.Arrays;
 
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
@@ -56,7 +49,6 @@ import com.oracle.truffle.api.dsl.NeverDefault;
 import com.oracle.truffle.api.dsl.Specialization;
 import com.oracle.truffle.api.nodes.Node;
 import com.oracle.truffle.api.profiles.InlinedBranchProfile;
-import com.oracle.truffle.api.profiles.InlinedConditionProfile;
 import com.oracle.truffle.api.strings.TruffleString.AsTruffleStringNode;
 import com.oracle.truffle.api.strings.TruffleString.Encoding;
 
@@ -82,7 +74,7 @@ public final class MutableTruffleString extends AbstractTruffleString {
     private static MutableTruffleString create(Object data, int offset, int length, Encoding encoding) {
         final int codePointLength;
         if (encoding.isFixedWidth()) {
-            codePointLength = encoding.isSupported() ? length : length / JCodings.getInstance().minLength(encoding.jCoding);
+            codePointLength = encoding.isSupported() ? length : length / JCodings.getInstance().minLength(encoding);
         } else {
             codePointLength = -1;
         }
@@ -307,7 +299,7 @@ public final class MutableTruffleString extends AbstractTruffleString {
 
         @Specialization
         static MutableTruffleString fromTruffleString(TruffleString a, Encoding expectedEncoding,
-                        @Bind("this") Node node,
+                        @Bind Node node,
                         @Cached TruffleString.ToIndexableNode toIndexableNode) {
             return createCopying(node, a, expectedEncoding, toIndexableNode);
         }
@@ -362,7 +354,7 @@ public final class MutableTruffleString extends AbstractTruffleString {
 
         @Specialization(guards = "a.isNative() || a.isImmutable()")
         static MutableTruffleString fromTruffleString(AbstractTruffleString a, Encoding expectedEncoding,
-                        @Bind("this") Node node,
+                        @Bind Node node,
                         @Cached TruffleString.ToIndexableNode toIndexableNode) {
             return createCopying(node, a, expectedEncoding, toIndexableNode);
         }
@@ -680,7 +672,7 @@ public final class MutableTruffleString extends AbstractTruffleString {
 
         @Specialization(guards = "!a.isCompatibleToIntl(encoding) || a.isImmutable()")
         static MutableTruffleString transcodeAndCopy(AbstractTruffleString a, Encoding encoding, TranscodingErrorHandler errorHandler,
-                        @Bind("this") Node node,
+                        @Bind Node node,
                         @Cached TruffleString.InternalSwitchEncodingNode switchEncodingNode,
                         @Cached AsMutableTruffleStringNode asMutableTruffleStringNode) {
             TruffleString switched = switchEncodingNode.execute(node, a, encoding, errorHandler);
@@ -738,7 +730,7 @@ public final class MutableTruffleString extends AbstractTruffleString {
 
         @Specialization(guards = "!a.isCompatibleToIntl(targetEncoding) || a.isImmutable()")
         static MutableTruffleString reinterpret(AbstractTruffleString a, Encoding expectedEncoding, Encoding targetEncoding,
-                        @Bind("this") Node node,
+                        @Bind Node node,
                         @Cached TruffleString.ToIndexableNode toIndexableNode) {
             a.checkEncoding(expectedEncoding);
             int byteLength = a.byteLength(expectedEncoding);
@@ -768,97 +760,8 @@ public final class MutableTruffleString extends AbstractTruffleString {
         }
     }
 
-    abstract static class DataClassProfile extends AbstractInternalNode {
-
-        abstract Object execute(Node node, Object a);
-
-        @Specialization
-        static byte[] doByteArray(byte[] v) {
-            return v;
-        }
-
-        @Specialization
-        static NativePointer doNativePointer(NativePointer v) {
-            return v;
-        }
-
-    }
-
-    abstract static class CalcLazyAttributesNode extends AbstractInternalNode {
-
-        abstract void execute(Node node, MutableTruffleString a);
-
-        @Specialization
-        static void calc(Node node, MutableTruffleString a,
-                        @Cached DataClassProfile dataClassProfile,
-                        @Cached InlinedConditionProfile asciiBytesLatinProfile,
-                        @Cached InlinedConditionProfile utf8Profile,
-                        @Cached InlinedConditionProfile utf8BrokenProfile,
-                        @Cached InlinedConditionProfile utf16Profile,
-                        @Cached InlinedConditionProfile utf16S0Profile,
-                        @Cached InlinedConditionProfile utf32Profile,
-                        @Cached InlinedConditionProfile utf32S0Profile,
-                        @Cached InlinedConditionProfile utf32S1Profile,
-                        @Cached InlinedConditionProfile exoticMaterializeNativeProfile,
-                        @Cached InlinedConditionProfile exoticValidProfile,
-                        @Cached InlinedConditionProfile exoticFixedWidthProfile) {
-
-            final Object data = dataClassProfile.execute(node, a.data());
-            final int encoding = a.encoding();
-            final int offset = a.offset();
-            final int length = a.length();
-            final int codePointLength;
-            final int codeRange;
-            if (utf16Profile.profile(node, isUTF16(encoding))) {
-                if (utf16S0Profile.profile(node, isStride0(a))) {
-                    codeRange = TStringOps.calcStringAttributesLatin1(node, data, offset, length);
-                    codePointLength = length;
-                } else {
-                    assert isStride1(a);
-                    long attrs = TStringOps.calcStringAttributesUTF16(node, data, offset, length, false);
-                    codePointLength = StringAttributes.getCodePointLength(attrs);
-                    codeRange = StringAttributes.getCodeRange(attrs);
-                }
-            } else if (utf32Profile.profile(node, isUTF32(encoding))) {
-                if (utf32S0Profile.profile(node, isStride0(a))) {
-                    codeRange = TStringOps.calcStringAttributesLatin1(node, data, offset, length);
-                } else if (utf32S1Profile.profile(node, isStride1(a))) {
-                    codeRange = TStringOps.calcStringAttributesBMP(node, data, offset, length);
-                } else {
-                    assert isStride2(a);
-                    codeRange = TStringOps.calcStringAttributesUTF32(node, data, offset, length);
-                }
-                codePointLength = length;
-            } else {
-                if (utf8Profile.profile(node, isUTF8(encoding))) {
-                    long attrs = TStringOps.calcStringAttributesUTF8(node, data, offset, length, false, false, utf8BrokenProfile);
-                    codeRange = StringAttributes.getCodeRange(attrs);
-                    codePointLength = StringAttributes.getCodePointLength(attrs);
-                } else if (asciiBytesLatinProfile.profile(node, TStringGuards.isAsciiBytesOrLatin1(encoding))) {
-                    int cr = TStringOps.calcStringAttributesLatin1(node, data, offset, length);
-                    codeRange = TStringGuards.is8Bit(cr) ? TSCodeRange.asciiLatinBytesNonAsciiCodeRange(encoding) : cr;
-                    codePointLength = length;
-                } else {
-                    if (data instanceof NativePointer) {
-                        ((NativePointer) data).materializeByteArray(node, a, exoticMaterializeNativeProfile);
-                    }
-                    long attrs = JCodings.getInstance().calcStringAttributes(node, data, offset, length, Encoding.get(encoding), 0, exoticValidProfile, exoticFixedWidthProfile);
-                    codeRange = StringAttributes.getCodeRange(attrs);
-                    codePointLength = StringAttributes.getCodePointLength(attrs);
-                }
-            }
-            a.updateAttributes(codePointLength, codeRange);
-        }
-    }
-
     static MutableTruffleString createCopying(Node node, AbstractTruffleString a, Encoding encoding, TruffleString.ToIndexableNode toIndexableNode) {
         return createCopying(node, a, encoding, a.byteLength(encoding), toIndexableNode);
-    }
-
-    static MutableTruffleString createCopying(Node node, AbstractTruffleString a, Encoding expectedEncoding, Encoding targetEncoding, TruffleString.ToIndexableNode toIndexableNode) {
-        int byteLength = a.byteLength(expectedEncoding);
-        checkByteLength(byteLength, targetEncoding);
-        return createCopying(node, a, targetEncoding, byteLength, toIndexableNode);
     }
 
     static MutableTruffleString createCopying(Node node, AbstractTruffleString a, Encoding targetEncoding, int byteLength, TruffleString.ToIndexableNode toIndexableNode) {

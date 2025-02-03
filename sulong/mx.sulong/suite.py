@@ -1,6 +1,8 @@
 suite = {
-  "mxversion": "6.43.0",
+  "mxversion": "7.33.0",
   "name" : "sulong",
+  "version" : "25.0.0",
+  "release" : False,
   "versionConflictResolution" : "latest",
   "groupId": "org.graalvm.llvm",
   "url": "http://www.graalvm.org/",
@@ -91,7 +93,7 @@ suite = {
         "windows": {
           "<others>" : {
             "path": "tests/support.txt",
-            "sha1": "9b3f44dd60da58735fce6b7346b4b3ef571b768e",
+            "digest": "sha512:c02b248975b267f4200603ff2ae40b9d0cdefad4a792f386d610f2b14fb4e67e288c235fd11ed596dd8c91a3dae62fdd741bf97b5c01b5f085485f221702f0a1",
           },
         },
         "<others>": {"<others>" : {"optional": True}},
@@ -256,6 +258,9 @@ suite = {
       "license" : "BSD-new",
       "testProject" : True,
       "jacoco" : "exclude",
+      # "JDK-8332744: [REDO] 'internal proprietary API' diagnostics if --system is configured to an earlier JDK version"
+      # is a fatal error with -Werror, can only be suppressed with `-Xlint:none`.
+      "javac.lint.overrides" : "none",
     },
     "com.oracle.truffle.llvm.tests.harness" : {
       "subDir" : "tests",
@@ -445,6 +450,9 @@ suite = {
       "workingSets" : "Truffle, LLVM",
       "license" : "BSD-new",
       "jacoco" : "include",
+      # "JDK-8332744: [REDO] 'internal proprietary API' diagnostics if --system is configured to an earlier JDK version"
+      # is a fatal error with -Werror, can only be suppressed with `-Xlint:none`.
+      "javac.lint.overrides" : "none",
     },
 
     "com.oracle.truffle.llvm.nativemode.resources" : {
@@ -478,7 +486,7 @@ suite = {
         "jdk.unsupported", # sun.misc.Signal
       ],
       "checkstyle" : "com.oracle.truffle.llvm.runtime",
-      "checkstyleVersion" : "10.7.0",
+      "checkstyleVersion" : "10.21.0",
       "annotationProcessors" : ["truffle:TRUFFLE_DSL_PROCESSOR"],
       "javaCompliance" : "17+",
       "spotbugsIgnoresGenerated" : True,
@@ -486,7 +494,10 @@ suite = {
       "license" : "BSD-new",
       "jacoco" : "include",
       # Using finalizer in signals implementation. GR-7018
-      "javac.lint.overrides" : "-deprecation",
+      # "javac.lint.overrides" : "-deprecation",
+      # "JDK-8332744: [REDO] 'internal proprietary API' diagnostics if --system is configured to an earlier JDK version"
+      # is a fatal error with -Werror, can only be suppressed with `-Xlint:none`.
+      "javac.lint.overrides" : "none",
     },
 
     "com.oracle.truffle.llvm.parser" : {
@@ -967,31 +978,31 @@ suite = {
       "ninja_install_targets" : ["install-cxx"],
       "os" : {
         "<others>" : {
-          "ninja_targets" : ["cxxabi"],
-          "ninja_install_targets" : ["install-cxxabi"],
+          "ninja_targets" : ["cxxabi", "unwind"],
+          "ninja_install_targets" : ["install-cxxabi", "install-unwind"],
           "results" : ["native"],
           "cmakeConfig" : {
             "CMAKE_INSTALL_RPATH" : "\\$ORIGIN",
-            "LLVM_ENABLE_RUNTIMES" : "libcxx;libcxxabi",
+            "LLVM_ENABLE_RUNTIMES" : "libcxx;libcxxabi;libunwind",
           },
         },
         "linux-musl" : {
-          "ninja_targets" : ["cxxabi"],
-          "ninja_install_targets" : ["install-cxxabi"],
+          "ninja_targets" : ["cxxabi", "unwind"],
+          "ninja_install_targets" : ["install-cxxabi", "install-unwind"],
           "results" : ["native"],
           "cmakeConfig" : {
             "CMAKE_INSTALL_RPATH" : "\\$ORIGIN",
-            "LLVM_ENABLE_RUNTIMES" : "libcxx;libcxxabi",
+            "LLVM_ENABLE_RUNTIMES" : "libcxx;libcxxabi;libunwind",
             "LIBCXX_HAS_MUSL_LIBC" : "YES",
           },
         },
         "darwin" : {
-          "ninja_targets" : ["cxxabi"],
-          "ninja_install_targets" : ["install-cxxabi"],
+          "ninja_targets" : ["cxxabi", "unwind"],
+          "ninja_install_targets" : ["install-cxxabi", "install-unwind"],
           "results" : ["native"],
           "cmakeConfig" : {
             "CMAKE_INSTALL_RPATH" : "@loader_path/",
-            "LLVM_ENABLE_RUNTIMES" : "libcxx;libcxxabi",
+            "LLVM_ENABLE_RUNTIMES" : "libcxx;libcxxabi;libunwind",
             "CMAKE_LIBTOOL" : "<path:LLVM_TOOLCHAIN>/bin/llvm-libtool-darwin",
           },
         },
@@ -1468,10 +1479,19 @@ suite = {
       "fileExts" : [".c"],
       "native" : True,
       "vpath" : True,
-      "variants" : ["executable-O0"],
+      "variants" : ["toolchain-O0"],
       "buildRef" : True,
-      "cmakeConfig" : {
-        "CMAKE_C_FLAGS" : "-Wno-everything",
+      "os" : {
+        "windows" : {
+          "cmakeConfig" : {
+            "CMAKE_C_FLAGS" : "-Wno-everything -include stdio.h",
+          },
+        },
+        "<others>": {
+          "cmakeConfig" : {
+            "CMAKE_C_FLAGS" : "-Wno-everything",
+          },
+        },
       },
       "dependencies" : ["SULONG_TEST"],
       "buildDependencies" : [
@@ -1488,10 +1508,19 @@ suite = {
       "fileExts" : [".cpp", ".C", ".cc"],
       "native" : True,
       "vpath" : True,
-      "variants" : ["executable-O0"],
+      "variants" : ["toolchain-O0"],
       "buildRef" : True,
-      "cmakeConfig" : {
-        "CMAKE_CXX_FLAGS" : "-Wno-everything",
+      "os" : {
+        "windows" : {
+          "cmakeConfig" : {
+            "CMAKE_CXX_FLAGS" : "-Wno-everything -include stdio.h",
+          },
+        },
+        "<others>": {
+          "cmakeConfig" : {
+            "CMAKE_CXX_FLAGS" : "-Wno-everything",
+          },
+        },
       },
       "dependencies" : ["SULONG_TEST"],
       "buildDependencies" : [
@@ -1551,7 +1580,7 @@ suite = {
       "fileExts" : [".c", ".cpp", ".C", ".cc", ".m"],
       "native" : True,
       "vpath" : True,
-      "variants" : ["executable-O0"],
+      "variants" : ["toolchain-O0"],
       "buildRef" : True,
       "os_arch" : {
         "darwin": {
@@ -1665,6 +1694,10 @@ suite = {
           "com.oracle.truffle.llvm.runtime.config.ConfigurationFactory",
           "com.oracle.truffle.llvm.spi.internal.LLVMResourceProvider",
         ],
+        "requires": [
+          "org.graalvm.collections",
+          "org.graalvm.polyglot",
+        ],
       },
       "useModulePath" : True,
       "subDir" : "projects",
@@ -1699,7 +1732,6 @@ suite = {
         "truffle:TRUFFLE_RUNTIME",
       ],
       "maven": {
-        "groupId": "org.graalvm.polyglot",
         "artifactId": "llvm-native-community",
         "tag": ["default", "public"],
       },
@@ -1713,7 +1745,6 @@ suite = {
         "LLVM_NATIVE_COMMUNITY",
       ],
       "maven": {
-        "groupId": "org.graalvm.polyglot",
         "artifactId": "llvm-community",
         "tag": ["default", "public"],
       },
@@ -1751,6 +1782,11 @@ suite = {
         "name" : "org.graalvm.llvm.nativemode_community",
         "exports" : [
           "* to org.graalvm.llvm.nativemode",
+        ],
+        "requires": [
+          "org.graalvm.collections",
+          "org.graalvm.polyglot",
+          "org.graalvm.truffle",
         ],
       },
       "useModulePath" : True,
@@ -1815,6 +1851,9 @@ suite = {
         "name" : "org.graalvm.llvm.launcher",
         "exports" : [
           "com.oracle.truffle.llvm.launcher to org.graalvm.launcher",
+        ],
+        "requires": [
+          "org.graalvm.polyglot",
         ],
       },
       "useModulePath" : True,

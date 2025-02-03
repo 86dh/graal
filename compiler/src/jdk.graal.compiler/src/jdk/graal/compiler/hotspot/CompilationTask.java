@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -28,9 +28,10 @@ import static jdk.graal.compiler.core.CompilationWrapper.ExceptionAction.Diagnos
 import static jdk.graal.compiler.core.CompilationWrapper.ExceptionAction.ExitVM;
 import static jdk.graal.compiler.core.GraalCompilerOptions.CompilationBailoutAsFailure;
 import static jdk.graal.compiler.core.GraalCompilerOptions.CompilationFailureAction;
+import static jdk.graal.compiler.core.GraalCompilerOptions.PrintCompilation;
 import static jdk.graal.compiler.core.phases.HighTier.Options.Inline;
 import static jdk.graal.compiler.java.BytecodeParserOptions.InlineDuringParsing;
-import static jdk.vm.ci.services.Services.IS_IN_NATIVE_IMAGE;
+import static org.graalvm.nativeimage.ImageInfo.inImageRuntimeCode;
 
 import java.io.PrintStream;
 
@@ -51,13 +52,17 @@ import jdk.graal.compiler.debug.DebugContext.Description;
 import jdk.graal.compiler.debug.DebugDumpScope;
 import jdk.graal.compiler.debug.DebugHandlersFactory;
 import jdk.graal.compiler.debug.GraalError;
+import jdk.graal.compiler.debug.MethodFilter;
 import jdk.graal.compiler.debug.TTY;
 import jdk.graal.compiler.debug.TimerKey;
 import jdk.graal.compiler.nodes.StructuredGraph;
 import jdk.graal.compiler.nodes.spi.StableProfileProvider;
 import jdk.graal.compiler.nodes.spi.StableProfileProvider.TypeFilter;
+import jdk.graal.compiler.options.Option;
 import jdk.graal.compiler.options.OptionKey;
+import jdk.graal.compiler.options.OptionType;
 import jdk.graal.compiler.options.OptionValues;
+import jdk.graal.compiler.options.OptionsParser;
 import jdk.graal.compiler.printer.GraalDebugHandlersFactory;
 import jdk.graal.compiler.serviceprovider.GraalServices;
 import jdk.vm.ci.code.BailoutException;
@@ -74,8 +79,25 @@ import jdk.vm.ci.runtime.JVMCICompiler;
 
 public class CompilationTask implements CompilationWatchDog.EventHandler {
 
+    static class Options {
+        @Option(help = "Perform a full GC of the libgraal heap after every compile to reduce idle heap and reclaim " +
+                        "references to the HotSpot heap.  This flag has no effect in the context of jargraal.", type = OptionType.Debug)//
+        public static final OptionKey<Boolean> FullGCAfterCompile = new OptionKey<>(false);
+        @Option(help = "Options which are enabled based on the method being compiled. " +
+                        "The basic syntax is a MethodFilter option specification followed by a list of options to be set for that compilation. " +
+                        "\"MethodFilter:\" is used to distinguish this from normal usage of MethodFilter as option." +
+                        "This can be repeated multiple times with each MethodFilter option separating the groups. " +
+                        "For example:" +
+                        "    -D" + HotSpotGraalOptionValues.GRAAL_OPTION_PROPERTY_PREFIX +
+                        ".PerMethodOptions=MethodFilter:String.indexOf SpeculativeGuardMovement=false MethodFilter:Integer.* SpeculativeGuardMovement=false" +
+                        " disables SpeculativeGuardMovement for compiles of String.indexOf and all methods in Integer. " +
+                        "If the value starts with a non-letter character, that " +
+                        "character is used as the separator between options instead of a space.")//
+        public static final OptionKey<String> PerMethodOptions = new OptionKey<>(null);
+    }
+
     @Override
-    public void onStuckCompilation(CompilationWatchDog watchDog, Thread watched, CompilationIdentifier compilation, StackTraceElement[] stackTrace, int stuckTime) {
+    public void onStuckCompilation(CompilationWatchDog watchDog, Thread watched, CompilationIdentifier compilation, StackTraceElement[] stackTrace, long stuckTime) {
         CompilationWatchDog.EventHandler.super.onStuckCompilation(watchDog, watched, compilation, stackTrace, stuckTime);
         TTY.println("Compilation %s on %s appears stuck - exiting VM", compilation, watched);
         HotSpotGraalServices.exit(STUCK_COMPILATION_EXIT_CODE, jvmciRuntime);
@@ -84,7 +106,7 @@ public class CompilationTask implements CompilationWatchDog.EventHandler {
     private final HotSpotJVMCIRuntime jvmciRuntime;
 
     protected final HotSpotGraalCompiler compiler;
-    private final HotSpotCompilationIdentifier compilationId;
+    protected final HotSpotCompilationIdentifier compilationId;
 
     private HotSpotInstalledCode installedCode;
 
@@ -97,6 +119,7 @@ public class CompilationTask implements CompilationWatchDog.EventHandler {
     private final StableProfileProvider profileProvider;
 
     private final boolean shouldRetainLocalVariables;
+    private final boolean shouldUsePreciseUnresolvedDeopts;
 
     private final boolean eagerResolving;
 
@@ -107,8 +130,8 @@ public class CompilationTask implements CompilationWatchDog.EventHandler {
     private TypeFilter profileSaveFilter;
 
     protected class HotSpotCompilationWrapper extends CompilationWrapper<HotSpotCompilationRequestResult> {
-        CompilationResult result;
-        StructuredGraph graph;
+        protected CompilationResult result;
+        protected StructuredGraph graph;
 
         protected HotSpotCompilationWrapper() {
             super(compiler.getGraalRuntime().getOutputDirectory(), compiler.getGraalRuntime().getCompilationProblemsPerAction());
@@ -133,6 +156,11 @@ public class CompilationTask implements CompilationWatchDog.EventHandler {
         }
 
         @Override
+        protected void parseRetryOptions(String[] options, EconomicMap<OptionKey<?>, Object> values) {
+            OptionsParser.parseOptions(options, values, OptionsParser.getOptionsLoader());
+        }
+
+        @Override
         protected HotSpotCompilationRequestResult handleException(Throwable t) {
             if (t instanceof BailoutException) {
                 BailoutException bailout = (BailoutException) t;
@@ -148,7 +176,7 @@ public class CompilationTask implements CompilationWatchDog.EventHandler {
             /*
              * Treat random exceptions from the compiler as indicating a problem compiling this
              * method. Report the result of toString instead of getMessage to ensure that the
-             * exception type is included in the output in case there's no detail mesage.
+             * exception type is included in the output in case there's no detail message.
              */
             return HotSpotCompilationRequestResult.failure(t.toString(), false);
         }
@@ -192,12 +220,50 @@ public class CompilationTask implements CompilationWatchDog.EventHandler {
                     return ExitVM;
                 }
                 // Automatically exit on failure when assertions are enabled in libgraal
-                if (IS_IN_NATIVE_IMAGE && (cause instanceof AssertionError || cause instanceof GraalError) && Assertions.assertionsEnabled()) {
+                if (shouldExitVM(cause)) {
                     TTY.println("Treating CompilationFailureAction as ExitVM due to assertion failure in libgraal: " + cause);
                     return ExitVM;
                 }
             }
             return super.lookupAction(values, cause);
+        }
+
+        /**
+         * Determines if {@code throwable} should result in a VM exit.
+         */
+        private static boolean shouldExitVM(Throwable throwable) {
+            // If not in libgraal, don't exit
+            if (!inImageRuntimeCode()) {
+                return false;
+            }
+            // If assertions are not enabled, don't exit.
+            if (!Assertions.assertionsEnabled()) {
+                return false;
+            }
+            // A normal assertion error => exit.
+            if (throwable instanceof AssertionError) {
+                return true;
+            }
+            // A GraalError not caused by an OOME => exit.
+            if (throwable instanceof GraalError && isNotCausedByOOME(throwable)) {
+                return true;
+            }
+            return false;
+        }
+
+        /**
+         * Determines if {@code throwable} has a causality chain denoting an OutOfMemoryError. This
+         * can happen in GC stress tests and exiting the VM would cause the test to fail.
+         */
+        private static boolean isNotCausedByOOME(Throwable throwable) {
+            Throwable t = throwable;
+            while (t != null) {
+                if (t instanceof OutOfMemoryError) {
+                    return false;
+                }
+                t = t.getCause();
+            }
+            return true;
         }
 
         @SuppressWarnings("try")
@@ -212,7 +278,7 @@ public class CompilationTask implements CompilationWatchDog.EventHandler {
 
             try (DebugContext.Scope s = debug.scope("Compiling", new DebugDumpScope(getIdString(), true))) {
                 graph = compiler.createGraph(method, entryBCI, profileProvider, compilationId, debug.getOptions(), debug);
-                result = compiler.compile(graph, shouldRetainLocalVariables, eagerResolving, compilationId, debug);
+                result = compiler.compile(graph, shouldRetainLocalVariables, shouldUsePreciseUnresolvedDeopts, eagerResolving, compilationId, debug);
             } catch (Throwable e) {
                 throw debug.handle(e);
             }
@@ -225,6 +291,10 @@ public class CompilationTask implements CompilationWatchDog.EventHandler {
 
             stats.finish(method, installedCode);
 
+            return buildCompilationRequestResult(method);
+        }
+
+        protected HotSpotCompilationRequestResult buildCompilationRequestResult(HotSpotResolvedJavaMethod method) {
             // For compilation of substitutions the method in the compilation request might be
             // different than the actual method parsed. The root of the compilation will always
             // be the first method in the methods list, so use that instead.
@@ -241,7 +311,7 @@ public class CompilationTask implements CompilationWatchDog.EventHandler {
                     HotSpotCompilationRequest request,
                     boolean useProfilingInfo,
                     boolean installAsDefault) {
-        this(jvmciRuntime, compiler, request, useProfilingInfo, false, false, installAsDefault);
+        this(jvmciRuntime, compiler, request, useProfilingInfo, false, false, false, installAsDefault);
     }
 
     public CompilationTask(HotSpotJVMCIRuntime jvmciRuntime,
@@ -249,8 +319,9 @@ public class CompilationTask implements CompilationWatchDog.EventHandler {
                     HotSpotCompilationRequest request,
                     boolean useProfilingInfo,
                     boolean shouldRetainLocalVariables,
+                    boolean shouldUsePreciseUnresolvedDeopts,
                     boolean installAsDefault) {
-        this(jvmciRuntime, compiler, request, useProfilingInfo, shouldRetainLocalVariables, false, installAsDefault);
+        this(jvmciRuntime, compiler, request, useProfilingInfo, shouldRetainLocalVariables, shouldUsePreciseUnresolvedDeopts, false, installAsDefault);
     }
 
     public CompilationTask(HotSpotJVMCIRuntime jvmciRuntime,
@@ -258,6 +329,7 @@ public class CompilationTask implements CompilationWatchDog.EventHandler {
                     HotSpotCompilationRequest request,
                     boolean useProfilingInfo,
                     boolean shouldRetainLocalVariables,
+                    boolean shouldUsePreciseUnresolvedDeopts,
                     boolean eagerResolving,
                     boolean installAsDefault) {
         this.jvmciRuntime = jvmciRuntime;
@@ -265,6 +337,7 @@ public class CompilationTask implements CompilationWatchDog.EventHandler {
         this.compilationId = new HotSpotCompilationIdentifier(request);
         this.profileProvider = useProfilingInfo ? new StableProfileProvider() : null;
         this.shouldRetainLocalVariables = shouldRetainLocalVariables;
+        this.shouldUsePreciseUnresolvedDeopts = shouldUsePreciseUnresolvedDeopts;
         this.eagerResolving = eagerResolving;
         this.installAsDefault = installAsDefault;
     }
@@ -273,25 +346,69 @@ public class CompilationTask implements CompilationWatchDog.EventHandler {
         this.profileSaveFilter = typeFilter;
     }
 
-    public OptionValues filterOptions(OptionValues options) {
+    public OptionValues filterOptions(OptionValues originalOptions) {
+        HotSpotGraalRuntimeProvider graalRuntime = compiler.getGraalRuntime();
+        GraalHotSpotVMConfig config = graalRuntime.getVMConfig();
+        OptionValues newOptions = originalOptions;
+
+        // Set any options for this compile.
+        String perMethodOptions = Options.PerMethodOptions.getValue(originalOptions);
+        if (perMethodOptions != null) {
+            EconomicMap<OptionKey<?>, Object> values;
+            try {
+                EconomicMap<String, String> optionSettings = null;
+                for (String option : OptionsParser.splitOptions(perMethodOptions)) {
+                    String prefix = "MethodFilter:";
+                    if (option.startsWith(prefix)) {
+                        MethodFilter filter = MethodFilter.parse(option.substring(prefix.length()));
+                        if (filter.matches(getMethod())) {
+                            // Begin accumulating options
+                            optionSettings = EconomicMap.create();
+                        } else if (optionSettings != null) {
+                            // This is a new MethodFilter: so stop collecting options
+                            break;
+                        }
+                    } else if (optionSettings != null) {
+                        OptionsParser.parseOptionSettingTo(option, optionSettings);
+                    } else {
+                        throw new IllegalArgumentException(Options.PerMethodOptions.getName() + " must start with \"MethodFilter:\" specification");
+                    }
+                }
+                if (optionSettings.isEmpty()) {
+                    throw new IllegalArgumentException("No options specified for MethodFilter:");
+                }
+                values = EconomicMap.create();
+                OptionsParser.parseOptions(optionSettings, values, OptionsParser.getOptionsLoader());
+            } catch (Exception e) {
+                values = null;
+                TTY.println(e.toString());
+                TTY.println("Errors encountered during " + Options.PerMethodOptions.getName() + " parsing.  Exiting...");
+                HotSpotGraalServices.exit(-1, jvmciRuntime);
+            }
+
+            if (values != null) {
+                newOptions = new OptionValues(newOptions, values);
+                if (PrintCompilation.getValue(newOptions)) {
+                    TTY.println("Compiling " + getMethod() + " with extra options: " + new OptionValues(values));
+                }
+            }
+        }
         /*
          * Disable inlining if HotSpot has it disabled unless it's been explicitly set in Graal.
          */
-        HotSpotGraalRuntimeProvider graalRuntime = compiler.getGraalRuntime();
-        GraalHotSpotVMConfig config = graalRuntime.getVMConfig();
-        OptionValues newOptions = options;
         if (!config.inline) {
             EconomicMap<OptionKey<?>, Object> m = OptionValues.newOptionMap();
-            if (Inline.getValue(options) && !Inline.hasBeenSet(options)) {
+            if (Inline.getValue(newOptions) && !Inline.hasBeenSet(newOptions)) {
                 m.put(Inline, false);
             }
-            if (InlineDuringParsing.getValue(options) && !InlineDuringParsing.hasBeenSet(options)) {
+            if (InlineDuringParsing.getValue(newOptions) && !InlineDuringParsing.hasBeenSet(newOptions)) {
                 m.put(InlineDuringParsing, false);
             }
             if (!m.isEmpty()) {
-                newOptions = new OptionValues(options, m);
+                newOptions = new OptionValues(newOptions, m);
             }
         }
+
         return newOptions;
     }
 
@@ -379,7 +496,7 @@ public class CompilationTask implements CompilationWatchDog.EventHandler {
             // Notify the runtime that most objects allocated in the current compilation
             // are dead and can be reclaimed.
             try (DebugCloseable timer = HintedFullGC.start(debug)) {
-                GraalServices.notifyLowMemoryPoint(true);
+                GraalServices.notifyLowMemoryPoint(Options.FullGCAfterCompile.getValue(debug.getOptions()));
             }
             return result;
         }
@@ -405,7 +522,7 @@ public class CompilationTask implements CompilationWatchDog.EventHandler {
             }
         }
 
-        ProfileReplaySupport result = ProfileReplaySupport.profileReplayPrologue(debug, graalRuntime, entryBCI, method, profileProvider, profileSaveFilter);
+        ProfileReplaySupport result = ProfileReplaySupport.profileReplayPrologue(debug, entryBCI, method, profileProvider, profileSaveFilter);
         try {
             return compilation.run(debug);
         } finally {
@@ -423,7 +540,7 @@ public class CompilationTask implements CompilationWatchDog.EventHandler {
                     }
                 }
                 if (result != null) {
-                    result.profileReplayEpilogue(debug, compilation, profileProvider, compilationId, entryBCI, method);
+                    result.profileReplayEpilogue(debug, compilation.result, compilation.graph, profileProvider, compilationId, entryBCI, method);
                 }
             } catch (Throwable t) {
                 return compilation.handleException(t);
@@ -432,7 +549,7 @@ public class CompilationTask implements CompilationWatchDog.EventHandler {
     }
 
     @SuppressWarnings("try")
-    private void installMethod(DebugContext debug, StructuredGraph graph, final CompilationResult compResult) {
+    protected void installMethod(DebugContext debug, StructuredGraph graph, final CompilationResult compResult) {
         final CodeCacheProvider codeCache = jvmciRuntime.getHostJVMCIBackend().getCodeCache();
         HotSpotBackend backend = compiler.getGraalRuntime().getHostBackend();
         installedCode = null;

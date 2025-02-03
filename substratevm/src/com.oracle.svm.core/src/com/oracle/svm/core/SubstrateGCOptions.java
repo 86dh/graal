@@ -25,64 +25,71 @@
 package com.oracle.svm.core;
 
 import static com.oracle.svm.core.option.RuntimeOptionKey.RuntimeOptionKeyFlag.Immutable;
+import static com.oracle.svm.core.option.RuntimeOptionKey.RuntimeOptionKeyFlag.IsolateCreationOnly;
 
+import jdk.graal.compiler.word.Word;
 import org.graalvm.collections.EconomicMap;
+
+import com.oracle.svm.core.heap.HeapSizeVerifier;
+import com.oracle.svm.core.option.HostedOptionKey;
+import com.oracle.svm.core.option.NotifyGCRuntimeOptionKey;
+import com.oracle.svm.core.option.RuntimeOptionKey;
+import com.oracle.svm.core.util.DuplicatedInNativeCode;
+
 import jdk.graal.compiler.options.Option;
 import jdk.graal.compiler.options.OptionKey;
 import jdk.graal.compiler.options.OptionType;
-import org.graalvm.word.WordFactory;
-
-import com.oracle.svm.core.heap.HeapSizeVerifier;
-import com.oracle.svm.core.option.NotifyGCRuntimeOptionKey;
-import com.oracle.svm.core.option.HostedOptionKey;
-import com.oracle.svm.core.option.RuntimeOptionKey;
 
 /**
  * Garbage collection-specific options that are supported by all garbage collectors. Some of these
  * options don't have any effect on the epsilon GC because it does not collect any garbage.
  */
+@DuplicatedInNativeCode
 public class SubstrateGCOptions {
     @Option(help = "The minimum heap size at run-time, in bytes.", type = OptionType.User)//
-    public static final RuntimeOptionKey<Long> MinHeapSize = new NotifyGCRuntimeOptionKey<>(0L, Immutable) {
+    public static final RuntimeOptionKey<Long> MinHeapSize = new NotifyGCRuntimeOptionKey<>(0L, IsolateCreationOnly) {
         @Override
         protected void onValueUpdate(EconomicMap<OptionKey<?>, Object> values, Long oldValue, Long newValue) {
             if (!SubstrateUtil.HOSTED) {
-                HeapSizeVerifier.verifyMinHeapSizeAgainstAddressSpace(WordFactory.unsigned(newValue));
+                HeapSizeVerifier.verifyMinHeapSizeAgainstMaxAddressSpaceSize(Word.unsigned(newValue));
             }
             super.onValueUpdate(values, oldValue, newValue);
         }
     };
 
     @Option(help = "The maximum heap size at run-time, in bytes.", type = OptionType.User)//
-    public static final RuntimeOptionKey<Long> MaxHeapSize = new NotifyGCRuntimeOptionKey<>(0L, Immutable) {
+    public static final RuntimeOptionKey<Long> MaxHeapSize = new NotifyGCRuntimeOptionKey<>(0L, IsolateCreationOnly) {
         @Override
         protected void onValueUpdate(EconomicMap<OptionKey<?>, Object> values, Long oldValue, Long newValue) {
             if (!SubstrateUtil.HOSTED) {
-                HeapSizeVerifier.verifyMaxHeapSizeAgainstAddressSpace(WordFactory.unsigned(newValue));
+                HeapSizeVerifier.verifyMaxHeapSizeAgainstMaxAddressSpaceSize(Word.unsigned(newValue));
             }
             super.onValueUpdate(values, oldValue, newValue);
         }
     };
 
     @Option(help = "The maximum size of the young generation at run-time, in bytes", type = OptionType.User)//
-    public static final RuntimeOptionKey<Long> MaxNewSize = new NotifyGCRuntimeOptionKey<>(0L, Immutable) {
+    public static final RuntimeOptionKey<Long> MaxNewSize = new NotifyGCRuntimeOptionKey<>(0L, IsolateCreationOnly) {
         @Override
         protected void onValueUpdate(EconomicMap<OptionKey<?>, Object> values, Long oldValue, Long newValue) {
             if (!SubstrateUtil.HOSTED) {
-                HeapSizeVerifier.verifyMaxNewSizeAgainstAddressSpace(WordFactory.unsigned(newValue));
+                HeapSizeVerifier.verifyMaxNewSizeAgainstMaxAddressSpaceSize(Word.unsigned(newValue));
             }
             super.onValueUpdate(values, oldValue, newValue);
         }
     };
 
-    @Option(help = "Default size in bytes of the address space to reserve.", type = OptionType.Expert)//
-    public static final RuntimeOptionKey<Long> ReservedAddressSpaceSize = new RuntimeOptionKey<>(0L);
+    @Option(help = "The number of bytes that should be reserved for the heap address space.", type = OptionType.Expert)//
+    public static final RuntimeOptionKey<Long> ReservedAddressSpaceSize = new RuntimeOptionKey<>(0L, IsolateCreationOnly);
 
     @Option(help = "Exit on the first occurrence of an out-of-memory error that is thrown because the Java heap is out of memory.", type = OptionType.Expert)//
-    public static final RuntimeOptionKey<Boolean> ExitOnOutOfMemoryError = new NotifyGCRuntimeOptionKey<>(false);
+    public static final RuntimeOptionKey<Boolean> ExitOnOutOfMemoryError = new RuntimeOptionKey<>(false, Immutable);
+
+    @Option(help = "Report a fatal error on the first occurrence of an out-of-memory error that is thrown because the Java heap is out of memory.", type = OptionType.Expert)//
+    public static final RuntimeOptionKey<Boolean> ReportFatalErrorOnOutOfMemoryError = new RuntimeOptionKey<>(false);
 
     @Option(help = "Ignore calls to System.gc().", type = OptionType.Expert)//
-    public static final RuntimeOptionKey<Boolean> DisableExplicitGC = new NotifyGCRuntimeOptionKey<>(false);
+    public static final RuntimeOptionKey<Boolean> DisableExplicitGC = new NotifyGCRuntimeOptionKey<>(false, Immutable);
 
     @Option(help = "Print summary GC information after each collection.", type = OptionType.Expert)//
     public static final RuntimeOptionKey<Boolean> PrintGC = new NotifyGCRuntimeOptionKey<>(false);

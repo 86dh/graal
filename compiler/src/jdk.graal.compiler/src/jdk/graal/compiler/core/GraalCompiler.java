@@ -24,6 +24,8 @@
  */
 package jdk.graal.compiler.core;
 
+import java.util.concurrent.TimeUnit;
+
 import jdk.graal.compiler.code.CompilationResult;
 import jdk.graal.compiler.core.common.PermanentBailoutException;
 import jdk.graal.compiler.core.common.RetryableBailoutException;
@@ -41,6 +43,7 @@ import jdk.graal.compiler.lir.asm.CompilationResultBuilderFactory;
 import jdk.graal.compiler.lir.asm.EntryPointDecorator;
 import jdk.graal.compiler.lir.phases.LIRSuites;
 import jdk.graal.compiler.nodes.StructuredGraph;
+import jdk.graal.compiler.options.OptionValues;
 import jdk.graal.compiler.phases.OptimisticOptimizations;
 import jdk.graal.compiler.phases.PhaseSuite;
 import jdk.graal.compiler.phases.common.DeadCodeEliminationPhase;
@@ -50,7 +53,6 @@ import jdk.graal.compiler.phases.tiers.MidTierContext;
 import jdk.graal.compiler.phases.tiers.Suites;
 import jdk.graal.compiler.phases.tiers.TargetProvider;
 import jdk.graal.compiler.phases.util.Providers;
-
 import jdk.vm.ci.meta.ProfilingInfo;
 import jdk.vm.ci.meta.ResolvedJavaMethod;
 
@@ -65,52 +67,61 @@ public class GraalCompiler {
 
     /**
      * Encapsulates all the inputs to a {@linkplain GraalCompiler#compile(Request) compilation}.
+     *
+     * @param graph the graph to be compiled
+     * @param installedCodeOwner the method the compiled code will be associated with once
+     *            installed. This argument can be null.
+     * @param providers
+     * @param backend
+     * @param graphBuilderSuite
+     * @param optimisticOpts
+     * @param profilingInfo
+     * @param suites
+     * @param lirSuites
+     * @param compilationResult
+     * @param factory
      */
-    public static class Request<T extends CompilationResult> {
-        public final StructuredGraph graph;
-        public final ResolvedJavaMethod installedCodeOwner;
-        public final Providers providers;
-        public final Backend backend;
-        public final PhaseSuite<HighTierContext> graphBuilderSuite;
-        public final OptimisticOptimizations optimisticOpts;
-        public final ProfilingInfo profilingInfo;
-        public final Suites suites;
-        public final LIRSuites lirSuites;
-        public final T compilationResult;
-        public final CompilationResultBuilderFactory factory;
-        public final EntryPointDecorator entryPointDecorator;
-        public final boolean verifySourcePositions;
+    public record Request<T extends CompilationResult>(StructuredGraph graph,
+                    ResolvedJavaMethod installedCodeOwner,
+                    Providers providers,
+                    Backend backend,
+                    PhaseSuite<HighTierContext> graphBuilderSuite,
+                    OptimisticOptimizations optimisticOpts,
+                    ProfilingInfo profilingInfo,
+                    Suites suites,
+                    LIRSuites lirSuites,
+                    T compilationResult,
+                    CompilationResultBuilderFactory factory,
+                    EntryPointDecorator entryPointDecorator,
+                    RequestedCrashHandler requestedCrashHandler,
+                    boolean verifySourcePositions) {
 
-        /**
-         * @param graph the graph to be compiled
-         * @param installedCodeOwner the method the compiled code will be associated with once
-         *            installed. This argument can be null.
-         * @param providers
-         * @param backend
-         * @param graphBuilderSuite
-         * @param optimisticOpts
-         * @param profilingInfo
-         * @param suites
-         * @param lirSuites
-         * @param compilationResult
-         * @param factory
-         */
-        public Request(StructuredGraph graph, ResolvedJavaMethod installedCodeOwner, Providers providers, Backend backend, PhaseSuite<HighTierContext> graphBuilderSuite,
-                        OptimisticOptimizations optimisticOpts, ProfilingInfo profilingInfo, Suites suites, LIRSuites lirSuites, T compilationResult, CompilationResultBuilderFactory factory,
-                        EntryPointDecorator entryPointDecorator, boolean verifySourcePositions) {
-            this.graph = graph;
-            this.installedCodeOwner = installedCodeOwner;
-            this.providers = providers;
-            this.backend = backend;
-            this.graphBuilderSuite = graphBuilderSuite;
-            this.optimisticOpts = optimisticOpts;
-            this.profilingInfo = profilingInfo;
-            this.suites = suites;
-            this.lirSuites = lirSuites;
-            this.compilationResult = compilationResult;
-            this.factory = factory;
-            this.entryPointDecorator = entryPointDecorator;
-            this.verifySourcePositions = verifySourcePositions;
+        public Request(StructuredGraph graph,
+                        ResolvedJavaMethod installedCodeOwner,
+                        Providers providers,
+                        Backend backend,
+                        PhaseSuite<HighTierContext> graphBuilderSuite,
+                        OptimisticOptimizations optimisticOpts,
+                        ProfilingInfo profilingInfo,
+                        Suites suites,
+                        LIRSuites lirSuites,
+                        T compilationResult,
+                        CompilationResultBuilderFactory factory,
+                        boolean verifySourcePositions) {
+            this(graph,
+                            installedCodeOwner,
+                            providers,
+                            backend,
+                            graphBuilderSuite,
+                            optimisticOpts,
+                            profilingInfo,
+                            suites,
+                            lirSuites,
+                            compilationResult,
+                            factory,
+                            null,
+                            null,
+                            verifySourcePositions);
         }
 
         /**
@@ -121,36 +132,6 @@ public class GraalCompiler {
         public T execute() {
             return GraalCompiler.compile(this);
         }
-    }
-
-    /**
-     * Requests compilation of a given graph.
-     *
-     * @param graph the graph to be compiled
-     * @param installedCodeOwner the method the compiled code will be associated with once
-     *            installed. This argument can be null.
-     * @return the result of the compilation
-     */
-    public static <T extends CompilationResult> T compileGraph(StructuredGraph graph, ResolvedJavaMethod installedCodeOwner, Providers providers, Backend backend,
-                    PhaseSuite<HighTierContext> graphBuilderSuite, OptimisticOptimizations optimisticOpts, ProfilingInfo profilingInfo, Suites suites, LIRSuites lirSuites, T compilationResult,
-                    CompilationResultBuilderFactory factory, boolean verifySourcePositions) {
-        return compile(new Request<>(graph, installedCodeOwner, providers, backend, graphBuilderSuite, optimisticOpts, profilingInfo, suites, lirSuites, compilationResult, factory, null,
-                        verifySourcePositions));
-    }
-
-    /**
-     * Requests compilation of a given graph.
-     *
-     * @param graph the graph to be compiled
-     * @param installedCodeOwner the method the compiled code will be associated with once
-     *            installed. This argument can be null.
-     * @return the result of the compilation
-     */
-    public static <T extends CompilationResult> T compileGraph(StructuredGraph graph, ResolvedJavaMethod installedCodeOwner, Providers providers, Backend backend,
-                    PhaseSuite<HighTierContext> graphBuilderSuite, OptimisticOptimizations optimisticOpts, ProfilingInfo profilingInfo, Suites suites, LIRSuites lirSuites, T compilationResult,
-                    CompilationResultBuilderFactory factory, EntryPointDecorator entryPointDecorator, boolean verifySourcePositions) {
-        return compile(new Request<>(graph, installedCodeOwner, providers, backend, graphBuilderSuite, optimisticOpts, profilingInfo, suites, lirSuites, compilationResult, factory,
-                        entryPointDecorator, verifySourcePositions));
     }
 
     /**
@@ -171,7 +152,7 @@ public class GraalCompiler {
                 if (r.verifySourcePositions) {
                     assert r.graph.verifySourcePositions(true);
                 }
-                checkForRequestedCrash(r.graph);
+                checkForRequestedCrash(r.graph, r.requestedCrashHandler());
             } catch (Throwable e) {
                 throw debug.handle(e);
             }
@@ -181,14 +162,26 @@ public class GraalCompiler {
     }
 
     /**
+     * Support for extra processing of a crash triggered by {@link GraalCompilerOptions#CrashAt}.
+     */
+    public interface RequestedCrashHandler {
+        /**
+         * @return true if the caller should proceed to throw an exception
+         */
+        @SuppressWarnings("unused")
+        boolean notifyCrash(OptionValues options, String crashMessage);
+    }
+
+    /**
      * Checks whether the {@link GraalCompilerOptions#CrashAt} option indicates that the compilation
      * of {@code graph} should result in an exception.
      *
      * @param graph a graph currently being compiled
+     * @param requestedCrashHandler
      * @throws RuntimeException if the value of {@link GraalCompilerOptions#CrashAt} matches
      *             {@code graph.method()} or {@code graph.name}
      */
-    private static void checkForRequestedCrash(StructuredGraph graph) {
+    private static void checkForRequestedCrash(StructuredGraph graph, RequestedCrashHandler requestedCrashHandler) {
         String value = GraalCompilerOptions.CrashAt.getValue(graph.getOptions());
         if (value != null) {
             boolean bailout = false;
@@ -204,7 +197,7 @@ public class GraalCompiler {
             String matchedLabel = match(graph, methodPattern);
             if (matchedLabel != null) {
                 String crashMessage = "Forced crash after compiling " + matchedLabel;
-                if (notifyCrash(crashMessage)) {
+                if (requestedCrashHandler == null || requestedCrashHandler.notifyCrash(graph.getOptions(), crashMessage)) {
                     if (permanentBailout) {
                         throw new PermanentBailoutException(crashMessage);
                     }
@@ -224,14 +217,14 @@ public class GraalCompiler {
      * @param graph a graph currently being compiled
      */
     private static void checkForRequestedDelay(StructuredGraph graph) {
-        long delay = Math.max(0, GraalCompilerOptions.InjectedCompilationDelay.getValue(graph.getOptions())) * 1000;
-        if (delay != 0) {
+        long delayNS = Math.max(0, TimeUnit.SECONDS.toNanos(GraalCompilerOptions.InjectedCompilationDelay.getValue(graph.getOptions())));
+        if (delayNS != 0) {
             String methodPattern = DebugOptions.MethodFilter.getValue(graph.getOptions());
             String matchedLabel = match(graph, methodPattern);
             if (matchedLabel != null) {
-                long start = System.currentTimeMillis();
-                TTY.printf("[%s] delaying compilation of %s for %d ms%n", Thread.currentThread().getName(), matchedLabel, delay);
-                while (System.currentTimeMillis() - start < delay) {
+                long startNS = System.nanoTime();
+                TTY.printf("[%s] delaying compilation of %s for %d ms%n", Thread.currentThread().getName(), matchedLabel, TimeUnit.NANOSECONDS.toMillis(delayNS));
+                while (System.nanoTime() - startNS < delayNS) {
                     try {
                         Thread.sleep(100);
                     } catch (InterruptedException e) {
@@ -261,18 +254,6 @@ public class GraalCompiler {
     }
 
     /**
-     * Substituted by {@code com.oracle.svm.graal.hotspot.libgraal.
-     * Target_jdk_graal_compiler_core_GraalCompiler} to optionally test routing fatal error handling
-     * from libgraal to HotSpot.
-     *
-     * @return true if the caller should proceed to throw an exception
-     */
-    @SuppressWarnings("unused")
-    private static boolean notifyCrash(String crashMessage) {
-        return true;
-    }
-
-    /**
      * Builds the graph, optimizes it.
      */
     @SuppressWarnings("try")
@@ -285,6 +266,7 @@ public class GraalCompiler {
                 try (CompilerPhaseScope cps = debug.enterCompilerPhase("Parsing")) {
                     graphBuilderSuite.apply(graph, highTierContext);
                     new DeadCodeEliminationPhase(DeadCodeEliminationPhase.Optionality.Optional).apply(graph);
+                    assert graph.verifySourcePositions(true);
                     debug.dump(DebugContext.BASIC_LEVEL, graph, "After parsing");
                 }
             } else {

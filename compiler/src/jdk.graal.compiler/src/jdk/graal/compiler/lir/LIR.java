@@ -36,7 +36,6 @@ import jdk.graal.compiler.debug.DebugContext;
 import jdk.graal.compiler.lir.StandardOp.BlockEndOp;
 import jdk.graal.compiler.lir.StandardOp.LabelHoldingOp;
 import jdk.graal.compiler.lir.StandardOp.LabelOp;
-import jdk.graal.compiler.lir.amd64.EndbranchOp;
 import jdk.graal.compiler.lir.gen.LIRGenerator;
 import jdk.graal.compiler.options.OptionValues;
 
@@ -83,6 +82,7 @@ public final class LIR extends LIRGenerator.VariableProvider implements EventCou
      * to trigger certain operations.
      */
     private int eventCounter;
+    private final EventCounterMarker eventCounterMarker = new EventCounterMarker();
 
     /**
      * Creates a new LIR instance for the specified compilation.
@@ -97,6 +97,11 @@ public final class LIR extends LIRGenerator.VariableProvider implements EventCou
         this.lirInstructions = new BlockMap<>(cfg);
         this.options = options;
         this.debug = debug;
+    }
+
+    @Override
+    public EventCounterMarker getEventCounterMarker() {
+        return eventCounterMarker;
     }
 
     @Override
@@ -298,9 +303,6 @@ public final class LIR extends LIRGenerator.VariableProvider implements EventCou
                 opWithExceptionEdge = op;
                 int distanceFromEnd = lastIndex - index;
                 assert distanceFromEnd <= MAX_EXCEPTION_EDGE_OP_DISTANCE_FROM_END : distanceFromEnd;
-            }
-            if (index != 1) {
-                assert !(op instanceof EndbranchOp) : String.format("EndbranchOp %s (Block %s) found at position %s", op.getClass(), block, index);
             }
             index++;
         }

@@ -26,7 +26,8 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.Map;
 
-import com.oracle.truffle.espresso.descriptors.Symbol;
+import com.oracle.truffle.espresso.classfile.descriptors.Name;
+import com.oracle.truffle.espresso.classfile.descriptors.Symbol;
 import com.oracle.truffle.espresso.impl.Field;
 import com.oracle.truffle.espresso.impl.Method;
 import com.oracle.truffle.espresso.impl.ObjectKlass;
@@ -73,18 +74,19 @@ public final class EnumRedefinitionPlugin extends InternalRedefinitionPlugin {
                             MethodVariable nameVar = variables[1];
                             String enumName = objectKlass.getMeta().toHostString((StaticObject) nameVar.getValue());
 
-                            Symbol<Symbol.Name> name = objectKlass.getContext().getNames().getOrCreate(enumName);
+                            Symbol<Name> name = objectKlass.getContext().getNames().getOrCreate(enumName);
                             Field field = objectKlass.lookupField(name, objectKlass.getType());
-                            Object existingEnumConstant = field.get(objectKlass.getStatics());
-                            if (existingEnumConstant != StaticObject.NULL) {
+                            StaticObject existingEnumConstant = field.getObject(objectKlass.getStatics());
+                            if (StaticObject.notNull(existingEnumConstant)) {
                                 // OK, re-run the constructor on the existing object
-                                Object[] args = new Object[variables.length - 1];
+                                Object[] args = new Object[variables.length];
+                                args[0] = existingEnumConstant;
                                 for (int i = 1; i < variables.length; i++) {
-                                    args[i - 1] = variables[i].getValue();
+                                    args[i] = variables[i].getValue();
                                 }
                                 // avoid a recursive hook on the constructor call
                                 method.removeActiveHook(this);
-                                method.invokeDirect(existingEnumConstant, args);
+                                method.invokeDirectSpecial(args);
                                 method.addMethodHook(this);
                             }
                             return false;

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2019, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -78,9 +78,11 @@ public final class WasiClockTimeGetNode extends WasmBuiltinRootNode {
         final Clockid clockId = Clockid.values()[clockIdValue];
         switch (clockId) {
             case Realtime:
-                memory.store_i64(this, resultAddress, realtimeNow());
+                memoryLib.store_i64(memory, this, resultAddress, realtimeNow());
                 break;
             case Monotonic:
+                memoryLib.store_i64(memory, this, resultAddress, monotonicNow());
+                break;
             case ProcessCputimeId:
             case ThreadCputimeId:
                 throw unimplementedClock(clockId);
@@ -91,6 +93,11 @@ public final class WasiClockTimeGetNode extends WasmBuiltinRootNode {
     @TruffleBoundary
     public static long realtimeNow() {
         return ChronoUnit.NANOS.between(Instant.EPOCH, Instant.now());
+    }
+
+    @TruffleBoundary
+    public static long monotonicNow() {
+        return System.nanoTime();
     }
 
     @TruffleBoundary

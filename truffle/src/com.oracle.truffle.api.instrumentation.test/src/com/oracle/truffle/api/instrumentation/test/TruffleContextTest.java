@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2020, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -401,12 +401,11 @@ public class TruffleContextTest extends AbstractPolyglotTest {
                 waitUntilExited.countDown();
             });
 
-            boolean othrerThreadExited = false;
-            while (!othrerThreadExited) {
-                try {
-                    waitUntilExited.await();
-                    othrerThreadExited = true;
-                } catch (InterruptedException ie) {
+            try {
+                TruffleSafepoint.setBlockedThreadInterruptible(null, CountDownLatch::await, waitUntilExited);
+            } catch (ThreadDeath e) {
+                if (!"Exit was called with exit code 1.".equals(e.getMessage())) {
+                    throw e;
                 }
             }
             /*
@@ -694,6 +693,9 @@ public class TruffleContextTest extends AbstractPolyglotTest {
 
         // arguments of the parent context are entered in the outer context
         result = InteropLibrary.getUncached().execute(result, outerObject);
+
+        // try a void method
+        InteropLibrary.getUncached().toNative(result);
 
         // and return values are entered again in the inner context
         result = InteropLibrary.getUncached().execute(result, outerObject);

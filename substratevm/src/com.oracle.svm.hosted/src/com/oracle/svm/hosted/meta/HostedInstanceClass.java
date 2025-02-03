@@ -26,18 +26,21 @@ package com.oracle.svm.hosted.meta;
 
 import com.oracle.graal.pointsto.meta.AnalysisType;
 
+import jdk.vm.ci.meta.Assumptions.AssumptionResult;
 import jdk.vm.ci.meta.JavaKind;
 import jdk.vm.ci.meta.ResolvedJavaField;
+import jdk.vm.ci.meta.ResolvedJavaMethod;
 
 public class HostedInstanceClass extends HostedClass {
 
     protected HostedField[] instanceFieldsWithoutSuper;
     protected HostedField[] instanceFieldsWithSuper;
+    protected int firstInstanceFieldOffset;
     protected int afterFieldsOffset;
     protected int instanceSize;
     protected boolean monitorFieldNeeded = false;
     protected int monitorFieldOffset = 0;
-    protected int optionalIdentityHashOffset = -1;
+    protected int identityHashOffset = 0;
 
     public HostedInstanceClass(HostedUniverse universe, AnalysisType wrapped, JavaKind kind, JavaKind storageKind, HostedClass superClass, HostedInterface[] interfaces) {
         super(universe, wrapped, kind, storageKind, superClass, interfaces);
@@ -86,7 +89,20 @@ public class HostedInstanceClass extends HostedClass {
         return null;
     }
 
+    public int getFirstInstanceFieldOffset() {
+        /*
+         * Each object has at least a header, so the firstInstanceFieldOffset should always be
+         * positive.
+         */
+        assert firstInstanceFieldOffset > 0 : "Invalid offset " + firstInstanceFieldOffset + " class: " + getName();
+        return firstInstanceFieldOffset;
+    }
+
     public int getAfterFieldsOffset() {
+        /*
+         * Each object has at least a header, so the afterFieldsOffset should always be positive.
+         */
+        assert afterFieldsOffset > 0 : "Invalid offset " + afterFieldsOffset + " class: " + getName();
         return afterFieldsOffset;
     }
 
@@ -115,13 +131,25 @@ public class HostedInstanceClass extends HostedClass {
         this.monitorFieldOffset = monitorFieldOffset;
     }
 
-    public int getOptionalIdentityHashOffset() {
-        return optionalIdentityHashOffset;
+    public int getIdentityHashOffset() {
+        return identityHashOffset;
     }
 
-    public void setOptionalIdentityHashOffset(int offset) {
-        assert this.optionalIdentityHashOffset == -1 : "setting identity hashcode field offset more than once";
-        assert offset >= 0;
-        this.optionalIdentityHashOffset = offset;
+    public void setIdentityHashOffset(int offset) {
+        assert this.identityHashOffset == 0 : "setting identity hashcode field offset more than once";
+        assert offset > 0;
+        this.identityHashOffset = offset;
+    }
+
+    @Override
+    public AssumptionResult<ResolvedJavaMethod> findUniqueConcreteMethod(ResolvedJavaMethod m) {
+        if (m.canBeStaticallyBound() || universe.hostVM().isClosedTypeWorld()) {
+            return super.findUniqueConcreteMethod(m);
+        }
+        /*
+         * With an open type world analysis we cannot make assumptions for methods that cannot be
+         * trivially statically bound.
+         */
+        return null;
     }
 }

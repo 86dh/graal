@@ -24,12 +24,12 @@
  */
 package com.oracle.svm.core.locks;
 
+import jdk.graal.compiler.word.Word;
 import org.graalvm.nativeimage.CurrentIsolate;
 import org.graalvm.nativeimage.IsolateThread;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
 import org.graalvm.word.UnsignedWord;
-import org.graalvm.word.WordFactory;
 
 import com.oracle.svm.core.Uninterruptible;
 import com.oracle.svm.core.c.CIsolateDataFactory;
@@ -50,8 +50,8 @@ import com.oracle.svm.core.util.VMError;
  * This class is almost an abstract base class for VMMutex. Sub-classes replace instances of VMMutex
  * with platform-specific implementations.
  */
-public class VMMutex {
-    static final UnsignedWord UNSPECIFIED_OWNER = WordFactory.unsigned(-1);
+public class VMMutex extends VMLockingPrimitive {
+    static final UnsignedWord UNSPECIFIED_OWNER = Word.unsigned(-1);
 
     private final String name;
     IsolateThread owner;
@@ -176,13 +176,13 @@ public class VMMutex {
     @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     public void clearCurrentThreadOwner() {
         assert isOwner() : "Only the thread that holds the mutex can clear the owner.";
-        owner = WordFactory.nullPointer();
+        owner = Word.nullPointer();
     }
 
     @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     public void clearUnspecifiedOwner() {
         assert hasUnspecifiedOwner();
-        owner = WordFactory.nullPointer();
+        owner = Word.nullPointer();
     }
 
     /**

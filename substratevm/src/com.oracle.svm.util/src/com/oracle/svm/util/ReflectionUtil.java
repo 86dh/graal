@@ -28,6 +28,7 @@ import java.lang.invoke.MethodHandles;
 import java.lang.invoke.VarHandle;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
+import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 
 /**
@@ -56,9 +57,17 @@ public final class ReflectionUtil {
         ModuleSupport.accessModuleByClass(ModuleSupport.Access.OPEN, ReflectionUtil.class, declaringClass);
     }
 
+    public static Class<?> lookupClass(String className) {
+        return lookupClass(false, className);
+    }
+
     public static Class<?> lookupClass(boolean optional, String className) {
+        return lookupClass(optional, className, ReflectionUtil.class.getClassLoader());
+    }
+
+    public static Class<?> lookupClass(boolean optional, String className, ClassLoader loader) {
         try {
-            return Class.forName(className, false, ReflectionUtil.class.getClassLoader());
+            return Class.forName(className, false, loader);
         } catch (ClassNotFoundException ex) {
             if (optional) {
                 return null;
@@ -75,6 +84,24 @@ public final class ReflectionUtil {
         try {
             Method result = declaringClass.getDeclaredMethod(methodName, parameterTypes);
             openModule(declaringClass);
+            result.setAccessible(true);
+            return result;
+        } catch (ReflectiveOperationException | LinkageError ex) {
+            if (optional) {
+                return null;
+            }
+            throw new ReflectionUtilError(ex);
+        }
+    }
+
+    public static Method lookupPublicMethodInClassHierarchy(Class<?> clazz, String methodName, Class<?>... parameterTypes) {
+        return lookupPublicMethodInClassHierarchy(false, clazz, methodName, parameterTypes);
+    }
+
+    public static Method lookupPublicMethodInClassHierarchy(boolean optional, Class<?> clazz, String methodName, Class<?>... parameterTypes) {
+        try {
+            Method result = clazz.getMethod(methodName, parameterTypes);
+            openModule(result.getDeclaringClass());
             result.setAccessible(true);
             return result;
         } catch (ReflectiveOperationException ex) {
@@ -101,6 +128,31 @@ public final class ReflectionUtil {
             }
             throw new ReflectionUtilError(ex);
         }
+    }
+
+    /**
+     * Invokes the provided method, and unwraps a possible {@link InvocationTargetException} so that
+     * it appears as if the method had been invoked directly without the use of reflection.
+     */
+    @SuppressWarnings("unchecked")
+    public static <T> T invokeMethod(Method method, Object receiver, Object... arguments) {
+        try {
+            method.setAccessible(true);
+            return (T) method.invoke(receiver, arguments);
+        } catch (InvocationTargetException ex) {
+            Throwable cause = ex.getCause();
+            if (cause != null) {
+                throw rethrow(cause);
+            }
+            throw new ReflectionUtilError(ex);
+        } catch (ReflectiveOperationException ex) {
+            throw new ReflectionUtilError(ex);
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private static <E extends Throwable> RuntimeException rethrow(Throwable ex) throws E {
+        throw (E) ex;
     }
 
     public static <T> T newInstance(Class<T> declaringClass) {

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -24,11 +24,10 @@
  */
 package jdk.graal.compiler.truffle.host;
 
-import jdk.graal.compiler.truffle.AbstractKnownTruffleTypes;
-import jdk.graal.compiler.truffle.KnownTruffleTypes;
-
 import com.oracle.truffle.compiler.TruffleCompilerRuntime;
 
+import jdk.graal.compiler.truffle.AbstractKnownTruffleTypes;
+import jdk.graal.compiler.truffle.KnownTruffleTypes;
 import jdk.vm.ci.meta.MetaAccessProvider;
 import jdk.vm.ci.meta.ResolvedJavaMethod;
 import jdk.vm.ci.meta.ResolvedJavaType;
@@ -41,6 +40,9 @@ public final class TruffleKnownHostTypes extends AbstractKnownTruffleTypes {
 
     // Checkstyle: stop field name check
 
+    // truffle.api.frame
+    public final ResolvedJavaType FrameDescriptor = lookupTypeCached("com.oracle.truffle.api.frame.FrameDescriptor");
+
     // truffle.api.impl
     public final ResolvedJavaType FrameWithoutBoxing = lookupType("com.oracle.truffle.api.impl.FrameWithoutBoxing");
     public final ResolvedJavaType OptimizedCallTarget = lookupTypeCached("com.oracle.truffle.runtime.OptimizedCallTarget");
@@ -51,6 +53,10 @@ public final class TruffleKnownHostTypes extends AbstractKnownTruffleTypes {
     public final ResolvedJavaMethod CompilerDirectives_transferToInterpreter = findMethod(CompilerDirectives, "transferToInterpreter");
     public final ResolvedJavaMethod CompilerDirectives_transferToInterpreterAndInvalidate = findMethod(CompilerDirectives, "transferToInterpreterAndInvalidate");
     public final ResolvedJavaMethod CompilerDirectives_inInterpreter = findMethod(CompilerDirectives, "inInterpreter");
+    public final ResolvedJavaType TruffleBoundary = lookupType("com.oracle.truffle.api.CompilerDirectives$TruffleBoundary");
+    public final ResolvedJavaType BytecodeInterpreterSwitch = lookupType("com.oracle.truffle.api.HostCompilerDirectives$BytecodeInterpreterSwitch");
+    public final ResolvedJavaType BytecodeInterpreterSwitchBoundary = lookupType("com.oracle.truffle.api.HostCompilerDirectives$BytecodeInterpreterSwitchBoundary");
+    public final ResolvedJavaType InliningCutoff = lookupType("com.oracle.truffle.api.HostCompilerDirectives$InliningCutoff");
 
     public final ResolvedJavaType HostCompilerDirectives = lookupTypeCached("com.oracle.truffle.api.HostCompilerDirectives");
     public final ResolvedJavaMethod HostCompilerDirectives_inInterpreterFastPath = findMethod(HostCompilerDirectives, "inInterpreterFastPath");

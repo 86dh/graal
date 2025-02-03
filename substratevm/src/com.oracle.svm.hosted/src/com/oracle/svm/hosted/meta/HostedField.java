@@ -24,15 +24,19 @@
  */
 package com.oracle.svm.hosted.meta;
 
-import java.lang.reflect.Field;
-
 import com.oracle.graal.pointsto.infrastructure.OriginalFieldProvider;
 import com.oracle.graal.pointsto.infrastructure.WrappedJavaField;
 import com.oracle.graal.pointsto.meta.AnalysisField;
+import com.oracle.graal.pointsto.meta.AnalysisUniverse;
+import com.oracle.svm.core.StaticFieldsSupport;
 import com.oracle.svm.core.meta.SharedField;
-import com.oracle.svm.hosted.ameta.ReadableJavaField;
+import com.oracle.svm.hosted.ameta.FieldValueInterceptionSupport;
+import com.oracle.svm.hosted.imagelayer.HostedImageLayerBuildingSupport;
+import com.oracle.svm.hosted.imagelayer.SVMImageLayerLoader;
 
+import jdk.vm.ci.meta.JavaConstant;
 import jdk.vm.ci.meta.JavaKind;
+import jdk.vm.ci.meta.ResolvedJavaField;
 
 /**
  * Store the compile-time information for a field in the Substrate VM, such as the field offset.
@@ -61,6 +65,7 @@ public class HostedField extends HostedElement implements OriginalFieldProvider,
     }
 
     protected void setLocation(int location) {
+        wrapped.checkGuaranteeFolded();
         assert this.location == LOC_UNINITIALIZED;
         assert location >= 0;
         this.location = location;
@@ -69,6 +74,10 @@ public class HostedField extends HostedElement implements OriginalFieldProvider,
     protected void setUnmaterializedStaticConstant() {
         assert this.location == LOC_UNINITIALIZED && isStatic();
         this.location = LOC_UNMATERIALIZED_STATIC_CONSTANT;
+    }
+
+    public boolean isUnmaterialized() {
+        return this.location == LOC_UNMATERIALIZED_STATIC_CONSTANT;
     }
 
     public boolean hasLocation() {
@@ -112,7 +121,7 @@ public class HostedField extends HostedElement implements OriginalFieldProvider,
 
     @Override
     public boolean isValueAvailable() {
-        return ReadableJavaField.isValueAvailable(wrapped);
+        return FieldValueInterceptionSupport.singleton().isValueAvailable(wrapped);
     }
 
     @Override
@@ -166,7 +175,23 @@ public class HostedField extends HostedElement implements OriginalFieldProvider,
     }
 
     @Override
-    public Field getJavaField() {
-        return wrapped.getJavaField();
+    public ResolvedJavaField unwrapTowardsOriginalField() {
+        return wrapped;
+    }
+
+    @Override
+    public boolean isInBaseLayer() {
+        return wrapped.isInBaseLayer();
+    }
+
+    @Override
+    public JavaConstant getStaticFieldBase() {
+        AnalysisUniverse universe = type.wrapped.getUniverse();
+        boolean primitive = getStorageKind().isPrimitive();
+        if (isInBaseLayer()) {
+            SVMImageLayerLoader imageLayerLoader = HostedImageLayerBuildingSupport.singleton().getLoader();
+            return primitive ? imageLayerLoader.getBaseLayerStaticPrimitiveFields() : imageLayerLoader.getBaseLayerStaticObjectFields();
+        }
+        return universe.getSnippetReflection().forObject(primitive ? StaticFieldsSupport.getStaticPrimitiveFields() : StaticFieldsSupport.getStaticObjectFields());
     }
 }

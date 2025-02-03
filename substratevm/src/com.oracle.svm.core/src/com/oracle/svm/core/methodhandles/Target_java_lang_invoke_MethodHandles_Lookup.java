@@ -24,10 +24,10 @@
  */
 package com.oracle.svm.core.methodhandles;
 
-import static com.oracle.svm.core.util.VMError.unimplemented;
-
 import java.lang.invoke.MethodHandle;
 import java.lang.invoke.MethodHandles;
+import java.security.ProtectionDomain;
+import java.util.concurrent.ConcurrentHashMap;
 
 import com.oracle.svm.core.SubstrateUtil;
 import com.oracle.svm.core.annotate.Alias;
@@ -35,16 +35,24 @@ import com.oracle.svm.core.annotate.Delete;
 import com.oracle.svm.core.annotate.RecomputeFieldValue;
 import com.oracle.svm.core.annotate.Substitute;
 import com.oracle.svm.core.annotate.TargetClass;
+import com.oracle.svm.core.annotate.TargetElement;
 import com.oracle.svm.core.hub.DynamicHub;
 import com.oracle.svm.core.invoke.Target_java_lang_invoke_MemberName;
+import com.oracle.svm.core.jdk.JDK21OrEarlier;
 
 @TargetClass(value = MethodHandles.class, innerClass = "Lookup")
 final class Target_java_lang_invoke_MethodHandles_Lookup {
-    @SuppressWarnings("static-method")
-    @Substitute
-    public Class<?> defineClass(@SuppressWarnings("unused") byte[] bytes) {
-        throw unimplemented("Defining new classes at runtime is not supported");
-    }
+    // Checkstyle: stop
+    @Delete //
+    static ConcurrentHashMap<Target_java_lang_invoke_MemberName, MethodHandle> LOOKASIDE_TABLE;
+    // Checkstyle: resume
+
+    /*
+     * Reset the field to avoid image build errors in case the field becomes reachable (plus the
+     * hosted values would be wrong at run time anyway).
+     */
+    @Alias @RecomputeFieldValue(kind = RecomputeFieldValue.Kind.Reset) //
+    private volatile ProtectionDomain cachedProtectionDomain;
 
     @SuppressWarnings({"static-method", "unused"})
     @Substitute
@@ -86,6 +94,7 @@ final class Target_java_lang_invoke_MethodHandles_Lookup {
     /** This call is a noop without the security manager. */
     @SuppressWarnings("unused")
     @Substitute
+    @TargetElement(onlyWith = JDK21OrEarlier.class)
     void checkSecurityManager(Class<?> refc) {
     }
 }

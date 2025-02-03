@@ -37,6 +37,7 @@ import org.graalvm.collections.EconomicMap;
 
 import com.oracle.graal.pointsto.PointsToAnalysis;
 import com.oracle.graal.pointsto.meta.AnalysisMethod;
+import com.oracle.graal.pointsto.meta.AnalysisType;
 import com.oracle.graal.pointsto.meta.PointsToAnalysisMethod;
 import com.oracle.graal.pointsto.util.AnalysisError;
 
@@ -120,8 +121,10 @@ public class MethodFlowsGraph implements MethodFlowsGraphInfo {
     public static boolean nonMethodFlow(TypeFlow<?> flow) {
         /*
          * These flows do not belong to any method, but can be reachable from a use.
+         * 
+         * AnyPrimitiveFlow can be either global (source == null) or local (source != null)
          */
-        return flow instanceof AllInstantiatedTypeFlow || flow instanceof AllSynchronizedTypeFlow || flow instanceof AnyPrimitiveSourceTypeFlow;
+        return flow instanceof AllInstantiatedTypeFlow || flow instanceof AllSynchronizedTypeFlow || (flow instanceof AnyPrimitiveSourceTypeFlow && flow.getSource() == null);
     }
 
     /**
@@ -437,6 +440,43 @@ public class MethodFlowsGraph implements MethodFlowsGraphInfo {
 
         if (isLinearized) {
             linearizeGraph(true);
+        }
+    }
+
+    /**
+     * For open world analysis saturate all the formal parameters and the returns from virtual
+     * invokes for all methods that can be directly accessible from the open world. This doesn't
+     * include methods in core VM classes.
+     */
+    void saturateForOpenTypeWorld(PointsToAnalysis bb) {
+        /*
+         * Skip methods declared in core VM types. The core is not extensible from the open world,
+         * and it should not be invoked directly.
+         */
+        AnalysisType declaringClass = method.getDeclaringClass();
+        if (bb.getHostVM().isCoreType(declaringClass)) {
+            return;
+        }
+
+        for (TypeFlow<?> parameter : getParameters()) {
+            if (parameter != null && parameter.canSaturate(bb)) {
+                parameter.enableFlow(bb);
+                parameter.onSaturated(bb);
+            }
+        }
+
+        /*
+         * Saturate the return of virtual invokes that could return new types from the open world.
+         * Returns from methods that cannot be overwritten, i.e., the receiver type is closed, are
+         * not saturated.
+         */
+        for (InvokeTypeFlow invokeTypeFlow : getInvokes()) {
+            if (!invokeTypeFlow.isDirectInvoke() && !bb.isClosed(invokeTypeFlow.getReceiverType())) {
+                if (invokeTypeFlow.actualReturn != null) {
+                    invokeTypeFlow.actualReturn.enableFlow(bb);
+                    invokeTypeFlow.actualReturn.onSaturated(bb);
+                }
+            }
         }
     }
 }

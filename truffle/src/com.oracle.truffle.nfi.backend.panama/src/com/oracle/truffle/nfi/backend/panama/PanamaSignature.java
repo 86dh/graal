@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -61,6 +61,7 @@ import com.oracle.truffle.api.profiles.InlinedBranchProfile;
 import com.oracle.truffle.nfi.backend.panama.FunctionExecuteNodeGen.SignatureExecuteNodeGen;
 import com.oracle.truffle.nfi.backend.spi.NFIBackendSignatureBuilderLibrary;
 import com.oracle.truffle.nfi.backend.spi.NFIBackendSignatureLibrary;
+import com.oracle.truffle.nfi.backend.spi.NFIState;
 import com.oracle.truffle.nfi.backend.spi.types.NativeSimpleType;
 import com.oracle.truffle.nfi.backend.spi.util.ProfiledArrayBuilder;
 import com.oracle.truffle.nfi.backend.spi.util.ProfiledArrayBuilder.ArrayBuilderFactory;
@@ -110,7 +111,7 @@ final class PanamaSignature {
         @GenerateAOT.Exclude
         static Object callGeneric(PanamaSignature self, Object functionPointer, Object[] args,
                         @CachedLibrary("functionPointer") InteropLibrary interop,
-                        @Bind("$node") Node node,
+                        @Bind Node node,
                         @Cached InlinedBranchProfile isExecutable,
                         @Cached InlinedBranchProfile toNative,
                         @Cached InlinedBranchProfile error,
@@ -148,11 +149,15 @@ final class PanamaSignature {
 
     @TruffleBoundary
     @SuppressWarnings({"preview", "restricted"})
-    MemorySegment bind(MethodHandle cachedHandle, Object receiver) {
+    MemorySegment bind(MethodHandle cachedHandle, Object receiver, Node location) {
         MethodHandle bound = cachedHandle.bindTo(receiver);
         @SuppressWarnings("preview")
         Arena arena = PanamaNFIContext.get(null).getContextArena();
-        return Linker.nativeLinker().upcallStub(bound, functionDescriptor, arena);
+        try {
+            return Linker.nativeLinker().upcallStub(bound, functionDescriptor, arena);
+        } catch (IllegalCallerException ic) {
+            throw NFIError.illegalNativeAccess(location);
+        }
     }
 
     @ExportMessage
@@ -161,6 +166,7 @@ final class PanamaSignature {
 
         @Specialization(guards = {"signature.signatureInfo == cachedSignatureInfo", "executable == cachedExecutable"}, assumptions = "getSingleContextAssumption()", limit = "3")
         static PanamaClosure doCachedExecutable(PanamaSignature signature, Object executable,
+                        @Bind Node node,
                         @Cached("signature.signatureInfo") CachedSignatureInfo cachedSignatureInfo,
                         @Cached("executable") Object cachedExecutable,
                         @Cached("create(cachedSignatureInfo, cachedExecutable)") MonomorphicClosureInfo cachedClosureInfo) {
@@ -170,29 +176,31 @@ final class PanamaSignature {
             MethodHandle cachedHandle = cachedClosureInfo.handle.asType(signature.getUpcallMethodType());
 
             @SuppressWarnings("preview")
-            MemorySegment ret = signature.bind(cachedHandle, cachedExecutable);
+            MemorySegment ret = signature.bind(cachedHandle, cachedExecutable, node);
 
             return new PanamaClosure(ret);
         }
 
         @Specialization(replaces = "doCachedExecutable", guards = "signature.signatureInfo == cachedSignatureInfo", limit = "3")
         static PanamaClosure doCachedSignature(PanamaSignature signature, Object executable,
+                        @Bind Node node,
                         @Cached("signature.signatureInfo") CachedSignatureInfo cachedSignatureInfo,
                         @Cached("create(cachedSignatureInfo)") PolymorphicClosureInfo cachedClosureInfo) {
             assert signature.signatureInfo == cachedSignatureInfo;
             MethodHandle cachedHandle = cachedClosureInfo.handle.asType(signature.getUpcallMethodType());
             @SuppressWarnings("preview")
-            MemorySegment ret = signature.bind(cachedHandle, executable);
+            MemorySegment ret = signature.bind(cachedHandle, executable, node);
             return new PanamaClosure(ret);
         }
 
         @TruffleBoundary
         @Specialization(replaces = "doCachedSignature")
-        static PanamaClosure createClosure(PanamaSignature signature, Object executable) {
+        static PanamaClosure createClosure(PanamaSignature signature, Object executable,
+                        @Bind Node node) {
             PolymorphicClosureInfo cachedClosureInfo = PolymorphicClosureInfo.create(signature.signatureInfo);
             MethodHandle cachedHandle = cachedClosureInfo.handle.asType(signature.getUpcallMethodType());
             @SuppressWarnings("preview")
-            MemorySegment ret = signature.bind(cachedHandle, executable);
+            MemorySegment ret = signature.bind(cachedHandle, executable, node);
             return new PanamaClosure(ret);
         }
     }
@@ -262,17 +270,19 @@ final class PanamaSignature {
 
             @Specialization(guards = {"builder.argsState == cachedState", "builder.retType == cachedRetType"}, limit = "3")
             static Object doCached(PanamaSignatureBuilder builder,
+                            @Bind Node node,
                             @Cached("builder.retType") @SuppressWarnings("unused") PanamaType cachedRetType,
                             @Cached("builder.argsState") @SuppressWarnings("unused") ArgsState cachedState,
                             @CachedLibrary("builder") NFIBackendSignatureBuilderLibrary self,
-                            @Cached("prepareSignatureInfo(cachedRetType, cachedState)") CachedSignatureInfo cachedSignatureInfo) {
+                            @Cached("prepareSignatureInfo(cachedRetType, cachedState, node)") CachedSignatureInfo cachedSignatureInfo) {
                 return create(PanamaNFIContext.get(self), cachedSignatureInfo, builder.upcallType);
             }
 
             @Specialization(replaces = "doCached")
             static Object doGeneric(PanamaSignatureBuilder builder,
+                            @Bind Node node,
                             @CachedLibrary("builder") NFIBackendSignatureBuilderLibrary self) {
-                CachedSignatureInfo sigInfo = prepareSignatureInfo(builder.retType, builder.argsState);
+                CachedSignatureInfo sigInfo = prepareSignatureInfo(builder.retType, builder.argsState, node);
 
                 return create(PanamaNFIContext.get(self), sigInfo, builder.upcallType);
             }
@@ -281,7 +291,7 @@ final class PanamaSignature {
 
     @TruffleBoundary
     @SuppressWarnings("unused")
-    public static CachedSignatureInfo prepareSignatureInfo(PanamaType retType, ArgsState state) {
+    public static CachedSignatureInfo prepareSignatureInfo(PanamaType retType, ArgsState state, Node location) {
         PanamaType[] argTypes = new PanamaType[state.argCount];
         ArgsState curState = state;
         for (int i = state.argCount - 1; i >= 0; i--) {
@@ -290,7 +300,7 @@ final class PanamaSignature {
         }
         @SuppressWarnings("preview")
         FunctionDescriptor descriptor = createDescriptor(argTypes, retType);
-        MethodHandle downcallHandle = createDowncallHandle(descriptor);
+        MethodHandle downcallHandle = createDowncallHandle(descriptor, location);
         return new CachedSignatureInfo(PanamaNFILanguage.get(null), retType, argTypes, descriptor, downcallHandle);
     }
 
@@ -308,12 +318,16 @@ final class PanamaSignature {
         return descriptor;
     }
 
-    static MethodHandle createDowncallHandle(@SuppressWarnings("preview") FunctionDescriptor descriptor) {
+    static MethodHandle createDowncallHandle(@SuppressWarnings("preview") FunctionDescriptor descriptor, Node location) {
         int parameterCount = descriptor.argumentLayouts().size();
-        @SuppressWarnings({"preview", "restricted"})
-        MethodHandle handle = Linker.nativeLinker().downcallHandle(descriptor).asSpreader(Object[].class, parameterCount).asType(
-                        MethodType.methodType(Object.class, new Class<?>[]{MemorySegment.class, Object[].class}));
-        return handle;
+        try {
+            @SuppressWarnings({"preview", "restricted"})
+            MethodHandle handle = Linker.nativeLinker().downcallHandle(descriptor).asSpreader(Object[].class, parameterCount).asType(
+                            MethodType.methodType(Object.class, new Class<?>[]{MemorySegment.class, Object[].class}));
+            return handle;
+        } catch (IllegalCallerException ic) {
+            throw NFIError.illegalNativeAccess(location);
+        }
     }
 
     static final class ArgsState {
@@ -360,20 +374,19 @@ final class PanamaSignature {
             return retType;
         }
 
-        Object execute(PanamaSignature signature, Object[] args, @SuppressWarnings("preview") MemorySegment segment) {
+        Object execute(PanamaSignature signature, Object[] args, @SuppressWarnings("preview") MemorySegment segment, Node node) {
             assert signature.signatureInfo == this;
             CompilerAsserts.partialEvaluationConstant(retType);
 
-            ErrorContext ctx = PanamaNFILanguage.get(null).errorContext.get();
+            PanamaNFILanguage language = PanamaNFILanguage.get(node);
+            NFIState nfiState = language.getNFIState();
+            ErrorContext ctx = language.errorContext.get();
             try {
-                int errnoMirror = ctx.getErrno();
-                if (ctx.nativeErrnoSet()) {
-                    ctx.setErrno(ctx.getNativeErrno());
-                }
+                // We need to set and capture native errno as close as possible to the native call
+                // to avoid the JVM clobbering it
+                ctx.setNativeErrno(nfiState.getNFIErrno());
                 Object result = (Object) downcallHandle.invokeExact(segment, args);
-
-                ctx.setNativeErrno(ctx.getErrno());
-                ctx.setErrno(errnoMirror);
+                nfiState.setNFIErrno(ctx.getNativeErrno());
 
                 if (result == null) {
                     return NativePointer.NULL;

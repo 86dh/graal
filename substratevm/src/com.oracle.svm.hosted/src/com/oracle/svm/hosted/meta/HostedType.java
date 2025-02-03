@@ -30,6 +30,7 @@ import com.oracle.graal.pointsto.infrastructure.OriginalClassProvider;
 import com.oracle.graal.pointsto.infrastructure.WrappedJavaType;
 import com.oracle.graal.pointsto.meta.AnalysisMethod;
 import com.oracle.graal.pointsto.meta.AnalysisType;
+import com.oracle.svm.core.SubstrateOptions;
 import com.oracle.svm.core.hub.DynamicHub;
 import com.oracle.svm.core.meta.SharedType;
 import com.oracle.svm.core.util.VMError;
@@ -58,11 +59,14 @@ public abstract class HostedType extends HostedElement implements SharedType, Wr
     protected HostedType[] subTypes;
     protected HostedField[] staticFields;
 
-    protected HostedMethod[] vtable;
-
+    boolean loadedFromPriorLayer;
     protected int typeID;
     protected HostedType uniqueConcreteImplementation;
     protected HostedMethod[] allDeclaredMethods;
+
+    // region closed-world only fields
+
+    protected HostedMethod[] closedTypeWorldVTable;
 
     /**
      * Start of type check range check. See {@link DynamicHub}.typeCheckStart
@@ -84,13 +88,54 @@ public abstract class HostedType extends HostedElement implements SharedType, Wr
     /**
      * Array used within type checks. See {@link DynamicHub}.typeCheckSlots
      */
-    protected short[] typeCheckSlots;
+    protected short[] closedTypeWorldTypeCheckSlots;
+
+    // endregion closed-world only fields
+
+    // region open-world only fields
+
+    protected HostedType[] typeCheckInterfaceOrder;
+    /**
+     * Flattened array of all dispatch tables methods installed in the hub for this type.
+     */
+    protected HostedMethod[] openTypeWorldDispatchTables;
+    /**
+     * Used for tracking original call targets contained within the dispatch table. This is in
+     * contrast with {@link #openTypeWorldDispatchTables}, which contains the resolved methods for
+     * each of the targets for this given type. In other words,
+     *
+     * <code> openTypeWorldDispatchTables[i] = resolveMethod(openTypeWorldDispatchTableSlotTargets[i], [HostedType]) </code>
+     */
+    protected HostedMethod[] openTypeWorldDispatchTableSlotTargets;
+    protected int[] itableStartingOffsets;
+
+    /**
+     * Instance class depth. Due to single-inheritance a parent class will be at the same depth in
+     * all subtypes. For interface types we set this to a negative value.
+     */
+    protected int typeIDDepth;
+
+    /*
+     * Since we store interfaces within the openTypeWorldTypeCheckSlots, we must know both the
+     * number of class and interface types to ensure we read from the correct locations.
+     */
+
+    protected int numClassTypes;
+
+    protected int numInterfaceTypes;
+
+    protected int[] openTypeWorldTypeCheckSlots;
+
+    // endregion open-world only fields
 
     /**
      * A more precise subtype that can replace this type as the declared type of values. Null if
      * this type is never instantiated and does not have any instantiated subtype, i.e., if no value
      * of this type can ever exist. Equal to this type if this type is instantiated, i.e, this type
      * cannot be strengthened.
+     * 
+     * For open world the strengthen stamp type is equal to this type itself if the type is not a
+     * leaf type, i.e., it cannot be extended.
      */
     protected HostedType strengthenStampType;
 
@@ -113,44 +158,107 @@ public abstract class HostedType extends HostedElement implements SharedType, Wr
         return subTypes;
     }
 
-    public HostedMethod[] getVTable() {
-        assert vtable != null;
-        return vtable;
+    protected HostedMethod[] getClosedTypeWorldVTable() {
+        assert closedTypeWorldVTable != null;
+        return closedTypeWorldVTable;
     }
 
+    public HostedMethod[] getOpenTypeWorldDispatchTables() {
+        assert openTypeWorldDispatchTables != null;
+        return openTypeWorldDispatchTables;
+    }
+
+    public HostedMethod[] getOpenTypeWorldDispatchTableSlotTargets() {
+        assert openTypeWorldDispatchTableSlotTargets != null;
+        return openTypeWorldDispatchTableSlotTargets;
+    }
+
+    public HostedMethod[] getVTable() {
+        return SubstrateOptions.useClosedTypeWorldHubLayout() ? getClosedTypeWorldVTable() : getOpenTypeWorldDispatchTables();
+    }
+
+    @Override
     public int getTypeID() {
         assert typeID != -1;
         return typeID;
     }
 
     public void setTypeCheckRange(short typeCheckStart, short typeCheckRange) {
+        assert SubstrateOptions.useClosedTypeWorldHubLayout();
         this.typeCheckStart = typeCheckStart;
         this.typeCheckRange = typeCheckRange;
     }
 
     public void setTypeCheckSlot(short typeCheckSlot) {
+        assert SubstrateOptions.useClosedTypeWorldHubLayout();
         this.typeCheckSlot = typeCheckSlot;
     }
 
-    public void setTypeCheckSlots(short[] typeCheckSlots) {
-        this.typeCheckSlots = typeCheckSlots;
+    public void setClosedTypeWorldTypeCheckSlots(short[] closedTypeWorldTypeCheckSlots) {
+        assert SubstrateOptions.useClosedTypeWorldHubLayout();
+        this.closedTypeWorldTypeCheckSlots = closedTypeWorldTypeCheckSlots;
     }
 
     public short getTypeCheckStart() {
+        assert SubstrateOptions.useClosedTypeWorldHubLayout();
         return typeCheckStart;
     }
 
     public short getTypeCheckRange() {
+        assert SubstrateOptions.useClosedTypeWorldHubLayout();
         return typeCheckRange;
     }
 
     public short getTypeCheckSlot() {
+        assert SubstrateOptions.useClosedTypeWorldHubLayout();
         return typeCheckSlot;
     }
 
-    public short[] getTypeCheckSlots() {
-        assert typeCheckSlots != null;
-        return typeCheckSlots;
+    public short[] getClosedTypeWorldTypeCheckSlots() {
+        assert SubstrateOptions.useClosedTypeWorldHubLayout();
+        assert closedTypeWorldTypeCheckSlots != null;
+        return closedTypeWorldTypeCheckSlots;
+    }
+
+    public void setTypeIDDepth(int typeIDDepth) {
+        assert !SubstrateOptions.useClosedTypeWorldHubLayout();
+        this.typeIDDepth = typeIDDepth;
+    }
+
+    public void setNumClassTypes(int numClassTypes) {
+        assert !SubstrateOptions.useClosedTypeWorldHubLayout();
+        this.numClassTypes = numClassTypes;
+    }
+
+    public void setNumInterfaceTypes(int numInterfaceTypes) {
+        assert !SubstrateOptions.useClosedTypeWorldHubLayout();
+        this.numInterfaceTypes = numInterfaceTypes;
+    }
+
+    public void setOpenTypeWorldTypeCheckSlots(int[] openTypeWorldTypeCheckSlots) {
+        assert !SubstrateOptions.useClosedTypeWorldHubLayout();
+        this.openTypeWorldTypeCheckSlots = openTypeWorldTypeCheckSlots;
+    }
+
+    public int getTypeIDDepth() {
+        assert !SubstrateOptions.useClosedTypeWorldHubLayout();
+        return typeIDDepth;
+    }
+
+    public int getNumClassTypes() {
+        assert !SubstrateOptions.useClosedTypeWorldHubLayout();
+        return numClassTypes;
+    }
+
+    public int getNumInterfaceTypes() {
+        assert !SubstrateOptions.useClosedTypeWorldHubLayout();
+        return numInterfaceTypes;
+    }
+
+    public int[] getOpenTypeWorldTypeCheckSlots() {
+        assert !SubstrateOptions.useClosedTypeWorldHubLayout();
+        assert openTypeWorldTypeCheckSlots != null : this;
+        return openTypeWorldTypeCheckSlots;
     }
 
     /**
@@ -171,8 +279,9 @@ public abstract class HostedType extends HostedElement implements SharedType, Wr
         return allDeclaredMethods;
     }
 
-    public HostedType getUniqueConcreteImplementation() {
-        return uniqueConcreteImplementation;
+    public void loadTypeID(int newTypeID) {
+        this.typeID = newTypeID;
+        this.loadedFromPriorLayer = true;
     }
 
     @Override
@@ -315,7 +424,7 @@ public abstract class HostedType extends HostedElement implements SharedType, Wr
     }
 
     @Override
-    public final ResolvedJavaType findLeastCommonAncestor(ResolvedJavaType otherType) {
+    public final HostedType findLeastCommonAncestor(ResolvedJavaType otherType) {
         return universe.lookup(wrapped.findLeastCommonAncestor(((HostedType) otherType).wrapped));
     }
 
@@ -444,7 +553,11 @@ public abstract class HostedType extends HostedElement implements SharedType, Wr
     }
 
     @Override
+    public ResolvedJavaType unwrapTowardsOriginalType() {
+        return wrapped;
+    }
+
     public Class<?> getJavaClass() {
-        return wrapped.getJavaClass();
+        return OriginalClassProvider.getJavaClass(this);
     }
 }

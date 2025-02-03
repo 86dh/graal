@@ -48,10 +48,12 @@ from collections import defaultdict
 import mx
 import mx_benchmark
 import mx_sdk_vm
+import mx_truffle
+import mx_unittest
+import mx_util
 # noinspection PyUnresolvedReferences
 import mx_wasm_benchmark  # pylint: disable=unused-import
 from mx_gate import Task, add_gate_runner
-import mx_unittest
 from mx_unittest import unittest
 
 _suite = mx.suite("wasm")
@@ -89,8 +91,6 @@ def get_jdk(forBuild=False):
 class GraalWasmDefaultTags:
     buildall = "buildall"
     wasmtest = "wasmtest"
-    wasmconstantspolicytest = "wasmconstantspolicytest"
-    wasmconstantspolicyextratest = "wasmconstantspolicyextratest"
     wasmextratest = "wasmextratest"
     wasmbenchtest = "wasmbenchtest"
     coverage = "coverage"
@@ -111,21 +111,20 @@ def graal_wasm_gate_runner(args, tasks):
         if t:
             mx.build(["--all"])
 
-    with Task("UnitTests", tasks, tags=[GraalWasmDefaultTags.wasmtest, GraalWasmDefaultTags.coverage], report=True) as t:
+    with Task("UnitTests", tasks, tags=[GraalWasmDefaultTags.wasmtest], report=True) as t:
         if t:
             unittest([*wabt_test_args(), "WasmTestSuite"], test_report_tags={'task': t.title})
             unittest([*wabt_test_args(), "-Dwasmtest.sharedEngine=true", "WasmTestSuite"], test_report_tags={'task': t.title})
 
-    with Task("ConstantsPolicyUnitTests", tasks, tags=[GraalWasmDefaultTags.wasmconstantspolicytest], report=True) as t:
-        if t:
-            unittest([*wabt_test_args(), "-Dwasmtest.storeConstantsPolicy=LARGE_ONLY", "WasmTestSuite"], test_report_tags={'task': t.title})
-
-    with Task("ExtraUnitTests", tasks, tags=[GraalWasmDefaultTags.wasmextratest, GraalWasmDefaultTags.coverage], report=True) as t:
+    with Task("ExtraUnitTests", tasks, tags=[GraalWasmDefaultTags.wasmextratest], report=True) as t:
         if t:
             unittest(["--suite", "wasm", "CSuite", "WatSuite"], test_report_tags={'task': t.title})
-    with Task("ConstantsPolicyExtraUnitTests", tasks, tags=[GraalWasmDefaultTags.wasmconstantspolicyextratest], report=True) as t:
+
+    with Task("CoverageTests", tasks, tags=[GraalWasmDefaultTags.coverage], report=True) as t:
         if t:
-            unittest(["--suite", "wasm", "-Dwasmtest.storeConstantsPolicy=LARGE_ONLY", "CSuite", "WatSuite"], test_report_tags={'task': t.title})
+            unittest([*wabt_test_args(), "-Dwasmtest.coverageMode=true", "WasmTestSuite"], test_report_tags={'task': t.title})
+            unittest([*wabt_test_args(), "-Dwasmtest.coverageMode=true", "-Dwasmtest.sharedEngine=true", "WasmTestSuite"], test_report_tags={'task': t.title})
+            unittest(["-Dwasmtest.coverageMode=true", "--suite", "wasm", "CSuite", "WatSuite"], test_report_tags={'task': t.title})
 
     # This is a gate used to test that all the benchmarks return the correct results. It does not upload anything,
     # and does not run on a dedicated machine.
@@ -135,7 +134,7 @@ def graal_wasm_gate_runner(args, tasks):
                 exitcode = mx_benchmark.benchmark([
                         "wasm:WASM_BENCHMARKCASES", "--",
                         "--jvm", "server", "--jvm-config", "graal-core",
-                        "-Dwasmbench.benchmarkName=" + b, "-Dwasmtest.keepTempFiles=true", "--",
+                        "-Dwasmbench.benchmarkName=" + b, "--",
                         "CMicroBenchmarkSuite", "-wi", "1", "-i", "1"])
                 if exitcode != 0:
                     mx.abort("Errors during benchmark tests, aborting.")
@@ -151,14 +150,19 @@ class WasmUnittestConfig(mx_unittest.MxUnittestConfig):
 
     def apply(self, config):
         (vmArgs, mainClass, mainClassArgs) = config
-        vmArgs = vmArgs + ['-Dpolyglot.engine.AllowExperimentalOptions=true']
         # Disable DefaultRuntime warning
-        vmArgs = vmArgs + ['-Dpolyglot.engine.WarnInterpreterOnly=false']
-        # Assert for enter/return parity of ProbeNode
-        vmArgs = vmArgs + ['-Dpolyglot.engine.AssertProbes=true', '-Dpolyglot.engine.AllowExperimentalOptions=true']
-        # limit heap memory to 2G, unless otherwise specified
+        vmArgs += ['-Dpolyglot.engine.WarnInterpreterOnly=false']
+        vmArgs += ['-Dpolyglot.engine.AllowExperimentalOptions=true']
+        # This is needed for Truffle since JEP 472: Prepare to Restrict the Use of JNI
+        mx_truffle.enable_truffle_native_access(vmArgs)
+        # GR-59703: This is needed for Truffle since JEP 498: Warn upon Use of Memory-Access Methods in sun.misc.Unsafe
+        mx_truffle.enable_sun_misc_unsafe(vmArgs)
+        # Assert for enter/return parity of ProbeNode (if assertions are enabled only)
+        if next((arg.startswith('-e') for arg in reversed(vmArgs) if arg in ['-ea', '-da', '-enableassertions', '-disableassertions']), False):
+            vmArgs += ['-Dpolyglot.engine.AssertProbes=true']
+        # limit heap memory to 4G, unless otherwise specified
         if not any(a.startswith('-Xm') for a in vmArgs):
-            vmArgs += ['-Xmx2g']
+            vmArgs += ['-Xmx4g']
         return (vmArgs, mainClass, mainClassArgs)
 
 
@@ -290,7 +294,7 @@ class WatBuildTask(GraalWasmBuildTask):
         mx.log("Building files from the source dir: " + source_dir)
         for root, filename in self.subject.getProgramSources():
             subdir = os.path.relpath(root, self.subject.getSourceDir())
-            mx.ensure_dir_exists(os.path.join(output_dir, subdir))
+            mx_util.ensure_dir_exists(os.path.join(output_dir, subdir))
 
             basename = remove_extension(filename)
             source_path = os.path.join(root, filename)
@@ -424,7 +428,7 @@ class EmscriptenBuildTask(GraalWasmBuildTask):
                 continue
 
             subdir = os.path.relpath(root, self.subject.getSourceDir())
-            mx.ensure_dir_exists(os.path.join(output_dir, subdir))
+            mx_util.ensure_dir_exists(os.path.join(output_dir, subdir))
 
             basename = remove_extension(filename)
             source_path = os.path.join(root, filename)
@@ -481,7 +485,7 @@ class EmscriptenBuildTask(GraalWasmBuildTask):
             # Step 5: if this is a benchmark project, create native binaries too.
             if mustRebuild:
                 if filename.endswith(".c"):
-                    mx.ensure_dir_exists(os.path.join(output_dir, subdir, NATIVE_BENCH_DIR))
+                    mx_util.ensure_dir_exists(os.path.join(output_dir, subdir, NATIVE_BENCH_DIR))
                     output_path = os.path.join(output_dir, subdir, NATIVE_BENCH_DIR, mx.exe_suffix(basename))
                     link_flags = ["-lm"]
                     gcc_cmd_line = [gcc_cmd] + cc_flags + [source_path, "-o", output_path] + include_flags + link_flags
@@ -535,7 +539,7 @@ mx_sdk_vm.register_graalvm_component(mx_sdk_vm.GraalVmLanguage(
     },
     standalone_dependencies_enterprise={
         'gwal': ('', []), # GraalWasm license files
-        'GraalVM enterprise license files': ('LICENSE.txt', ['GRAALVM-README.md']),
+        'GraalVM enterprise license files': ('', ['LICENSE.txt', 'GRAALVM-README.md']),
     },
     license_files=[],
     third_party_license_files=[],
@@ -631,12 +635,19 @@ def emscripten_init(args):
 @mx.command(_suite.name, "wasm")
 def wasm(args, **kwargs):
     """Run a WebAssembly program."""
-    vmArgs, wasmArgs = mx.extract_VM_args(args, useDoubleDash=False, defaultAllVMArgs=False)
+
+    vmArgs, wasmArgs = mx.extract_VM_args(args, useDoubleDash=True, defaultAllVMArgs=False)
+    # This is needed for Truffle since JEP 472: Prepare to Restrict the Use of JNI
+    vmArgs += ['--enable-native-access=org.graalvm.truffle']
+    # GR-59703: This is needed for Truffle since JEP 498: Warn upon Use of Memory-Access Methods in sun.misc.Unsafe
+    mx_truffle.enable_sun_misc_unsafe(vmArgs)
+
     path_args = mx.get_runtime_jvm_args([
         "TRUFFLE_API",
         "org.graalvm.wasm",
         "org.graalvm.wasm.launcher",
     ] + (['tools:CHROMEINSPECTOR', 'tools:TRUFFLE_PROFILER', 'tools:INSIGHT'] if mx.suite('tools', fatalIfMissing=False) is not None else []))
+
     return mx.run_java(vmArgs + path_args + ["org.graalvm.wasm.launcher.WasmLauncher"] + wasmArgs, jdk=get_jdk(), **kwargs)
 
 @mx.command(_suite.name, "wasm-memory-layout")

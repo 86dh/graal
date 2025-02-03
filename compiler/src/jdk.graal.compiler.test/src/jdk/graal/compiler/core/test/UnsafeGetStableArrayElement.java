@@ -41,6 +41,8 @@ import java.util.concurrent.Callable;
 import java.util.stream.Collectors;
 import java.util.stream.StreamSupport;
 
+import org.junit.Assert;
+
 import jdk.graal.compiler.api.replacements.SnippetReflectionProvider;
 import jdk.graal.compiler.nodes.ConstantNode;
 import jdk.graal.compiler.nodes.StructuredGraph;
@@ -49,8 +51,6 @@ import jdk.graal.compiler.nodes.StructuredGraph.Builder;
 import jdk.graal.compiler.phases.PhaseSuite;
 import jdk.graal.compiler.phases.tiers.HighTierContext;
 import jdk.graal.compiler.test.AddExports;
-import org.junit.Assert;
-
 import jdk.internal.misc.Unsafe;
 import jdk.vm.ci.code.InstalledCode;
 import jdk.vm.ci.code.InvalidInstalledCodeException;
@@ -87,6 +87,15 @@ public class UnsafeGetStableArrayElement extends GraalCompilerTest {
         STABLE_CHAR_ARRAY[1] = 0x10;
         STABLE_BOOLEAN_ARRAY[1] = true;
         Setter.reset();
+
+        // Ensure boxing caches are initialized
+        Byte.valueOf((byte)0);
+        Short.valueOf((short)0);
+        Character.valueOf('0');
+        Integer.valueOf(0);
+        Long.valueOf(0);
+        Float.valueOf(0.0F);
+        Double.valueOf(0.0F);
     }
     static final Unsafe U = Unsafe.getUnsafe();
 
@@ -211,7 +220,7 @@ public class UnsafeGetStableArrayElement extends GraalCompilerTest {
         static double  testD_D() { return U.getDouble( STABLE_DOUBLE_ARRAY, ARRAY_DOUBLE_BASE_OFFSET); }
 
         @SuppressWarnings("removal")
-        static Object  testL_L() { return U.getObject( STABLE_OBJECT_ARRAY, ARRAY_OBJECT_BASE_OFFSET); }
+        static Object  testL_L() { return U.getReference(STABLE_OBJECT_ARRAY, ARRAY_OBJECT_BASE_OFFSET); }
         static boolean testL_Z() { return U.getBoolean(STABLE_OBJECT_ARRAY, ARRAY_OBJECT_BASE_OFFSET); }
         static byte    testL_B() { return U.getByte(   STABLE_OBJECT_ARRAY, ARRAY_OBJECT_BASE_OFFSET); }
         static short   testL_S() { return U.getShort(  STABLE_OBJECT_ARRAY, ARRAY_OBJECT_BASE_OFFSET); }
@@ -313,17 +322,13 @@ public class UnsafeGetStableArrayElement extends GraalCompilerTest {
     /**
      * Tests this sequence:
      *
-     * <pre>
-     * 1. {@code
-     * res1 = c()
-     * }
-     * 2. Compile c.
-     * 3. Change stable array element read by c.
-     * 4. {@code
-     * res2 = c()
-     * }
-     * 5. {@code assert Objects.equals(res1, res2)}
-     * </pre>
+     * <ol>
+     * <li>{@code res1 = c()}</li>
+     * <li>Compile c.</li>
+     * <li>Change stable array element read by c.</li>
+     * <li>{@code res2 = c()}</li>
+     * <li>{@code assert Objects.equals(res1, res2)}</li>
+     * </ol>
      *
      * That is, tests that compiling a method with an unsafe read of a stable array element folds
      * the element value into the compiled code.
@@ -363,17 +368,13 @@ public class UnsafeGetStableArrayElement extends GraalCompilerTest {
     /**
      * Tests this sequence:
      *
-     * <pre>
-     * 1. {@code
-     * res1 = c()
-     * }
-     * 2. Compile c.
-     * 3. Change stable array element read by c.
-     * 4. {@code
-     * res2 = c()
-     * }
-     * 5. {@code assert !Objects.equals(res1, res2)}
-     * </pre>
+     * <ol>
+     * <li>{@code res1 = c()}</li>
+     * <li>Compile c.</li>
+     * <li>Change stable array element read by c.</li>
+     * <li>{@code res2 = c()}</li>
+     * <li>{@code assert !Objects.equals(res1, res2)}</li>
+     * </ol>
      *
      * That is, tests that compiling a method with an unsafe read of a stable array element does not
      * fold the element value into the compiled code.
@@ -414,7 +415,11 @@ public class UnsafeGetStableArrayElement extends GraalCompilerTest {
 
     @org.junit.Test
     public void test6() throws Exception {
-        testMatched(Test::testZ_J, Test::changeZ);
+        if (ARRAY_BOOLEAN_BASE_OFFSET == ARRAY_LONG_BASE_OFFSET) {
+            testMatched(Test::testZ_J, Test::changeZ);
+        } else {
+            testMismatched(Test::testZ_J, Test::changeZ);
+        }
     }
 
     @org.junit.Test
@@ -424,7 +429,11 @@ public class UnsafeGetStableArrayElement extends GraalCompilerTest {
 
     @org.junit.Test
     public void test8() throws Exception {
-        testMatched(Test::testZ_D, Test::changeZ);
+        if (ARRAY_BOOLEAN_BASE_OFFSET == ARRAY_DOUBLE_BASE_OFFSET) {
+            testMatched(Test::testZ_D, Test::changeZ);
+        } else {
+            testMismatched(Test::testZ_D, Test::changeZ);
+        }
     }
 
     @org.junit.Test
@@ -454,7 +463,11 @@ public class UnsafeGetStableArrayElement extends GraalCompilerTest {
 
     @org.junit.Test
     public void test14() throws Exception {
-        testMatched(Test::testB_J, Test::changeB);
+        if (ARRAY_BYTE_BASE_OFFSET == ARRAY_LONG_BASE_OFFSET) {
+            testMatched(Test::testB_J, Test::changeB);
+        } else {
+            testMismatched(Test::testB_J, Test::changeB);
+        }
     }
 
     @org.junit.Test
@@ -464,7 +477,11 @@ public class UnsafeGetStableArrayElement extends GraalCompilerTest {
 
     @org.junit.Test
     public void test16() throws Exception {
-        testMatched(Test::testB_D, Test::changeB);
+        if (ARRAY_BYTE_BASE_OFFSET == ARRAY_DOUBLE_BASE_OFFSET) {
+            testMatched(Test::testB_D, Test::changeB);
+        } else {
+            testMismatched(Test::testB_D, Test::changeB);
+        }
     }
 
     @org.junit.Test
@@ -499,7 +516,11 @@ public class UnsafeGetStableArrayElement extends GraalCompilerTest {
 
     @org.junit.Test
     public void test23() throws Exception {
-        testMatched(Test::testS_J, Test::changeS);
+        if (ARRAY_SHORT_BASE_OFFSET == ARRAY_LONG_BASE_OFFSET) {
+            testMatched(Test::testS_J, Test::changeS);
+        } else {
+            testMismatched(Test::testS_J, Test::changeS);
+        }
     }
 
     @org.junit.Test
@@ -509,7 +530,11 @@ public class UnsafeGetStableArrayElement extends GraalCompilerTest {
 
     @org.junit.Test
     public void test25() throws Exception {
-        testMatched(Test::testS_D, Test::changeS);
+        if (ARRAY_SHORT_BASE_OFFSET == ARRAY_DOUBLE_BASE_OFFSET) {
+            testMatched(Test::testS_D, Test::changeS);
+        } else {
+            testMismatched(Test::testS_D, Test::changeS);
+        }
     }
 
     @org.junit.Test
@@ -544,7 +569,11 @@ public class UnsafeGetStableArrayElement extends GraalCompilerTest {
 
     @org.junit.Test
     public void test32() throws Exception {
-        testMatched(Test::testC_J, Test::changeC);
+        if (ARRAY_CHAR_BASE_OFFSET == ARRAY_LONG_BASE_OFFSET) {
+            testMatched(Test::testC_J, Test::changeC);
+        } else {
+            testMismatched(Test::testC_J, Test::changeC);
+        }
     }
 
     @org.junit.Test
@@ -554,7 +583,11 @@ public class UnsafeGetStableArrayElement extends GraalCompilerTest {
 
     @org.junit.Test
     public void test34() throws Exception {
-        testMatched(Test::testC_D, Test::changeC);
+        if (ARRAY_CHAR_BASE_OFFSET == ARRAY_DOUBLE_BASE_OFFSET) {
+            testMatched(Test::testC_D, Test::changeC);
+        } else {
+            testMismatched(Test::testC_D, Test::changeC);
+        }
     }
 
     @org.junit.Test
@@ -589,7 +622,11 @@ public class UnsafeGetStableArrayElement extends GraalCompilerTest {
 
     @org.junit.Test
     public void test41() throws Exception {
-        testMatched(Test::testI_J, Test::changeI);
+        if (ARRAY_INT_BASE_OFFSET == ARRAY_LONG_BASE_OFFSET) {
+            testMatched(Test::testI_J, Test::changeI);
+        } else {
+            testMismatched(Test::testI_J, Test::changeI);
+        }
     }
 
     @org.junit.Test
@@ -599,7 +636,11 @@ public class UnsafeGetStableArrayElement extends GraalCompilerTest {
 
     @org.junit.Test
     public void test43() throws Exception {
-        testMatched(Test::testI_D, Test::changeI);
+        if (ARRAY_INT_BASE_OFFSET == ARRAY_DOUBLE_BASE_OFFSET) {
+            testMatched(Test::testI_D, Test::changeI);
+        } else {
+            testMismatched(Test::testI_D, Test::changeI);
+        }
     }
 
     @org.junit.Test
@@ -669,7 +710,11 @@ public class UnsafeGetStableArrayElement extends GraalCompilerTest {
 
     @org.junit.Test
     public void test57() throws Exception {
-        testMatched(Test::testF_J, Test::changeF);
+        if (ARRAY_FLOAT_BASE_OFFSET == ARRAY_LONG_BASE_OFFSET) {
+            testMatched(Test::testF_J, Test::changeF);
+        } else {
+            testMismatched(Test::testF_J, Test::changeF);
+        }
     }
 
     @org.junit.Test
@@ -679,7 +724,11 @@ public class UnsafeGetStableArrayElement extends GraalCompilerTest {
 
     @org.junit.Test
     public void test59() throws Exception {
-        testMatched(Test::testF_D, Test::changeF);
+        if (ARRAY_FLOAT_BASE_OFFSET == ARRAY_DOUBLE_BASE_OFFSET) {
+            testMatched(Test::testF_D, Test::changeF);
+        } else {
+            testMismatched(Test::testF_D, Test::changeF);
+        }
     }
 
     @org.junit.Test

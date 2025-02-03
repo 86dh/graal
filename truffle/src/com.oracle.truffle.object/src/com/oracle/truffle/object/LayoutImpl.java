@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -40,6 +40,7 @@
  */
 package com.oracle.truffle.object;
 
+import java.lang.invoke.MethodHandles;
 import java.lang.invoke.VarHandle;
 import java.util.Map;
 import java.util.Objects;
@@ -107,8 +108,7 @@ public abstract class LayoutImpl extends com.oracle.truffle.api.object.Layout {
     protected abstract int getPrimitiveFieldCount();
 
     /** @since 0.17 or earlier */
-    @Override
-    public abstract Shape.Allocator createAllocator();
+    public abstract ShapeImpl.BaseAllocator createAllocator();
 
     /** @since 0.17 or earlier */
     public LayoutStrategy getStrategy() {
@@ -134,10 +134,22 @@ public abstract class LayoutImpl extends com.oracle.truffle.api.object.Layout {
      * Preinitializes DynamicObject layouts for native image generation.
      *
      * NOTE: this method is called reflectively by downstream projects.
+     *
+     * @deprecated method overload for JDK 21 backwards compatibility.
      */
+    @Deprecated(since = "24.2")
     static void initializeDynamicObjectLayout(Class<?> dynamicObjectClass) {
+        initializeDynamicObjectLayout(dynamicObjectClass, null);
+    }
+
+    /**
+     * Preinitializes DynamicObject layouts for native image generation.
+     *
+     * NOTE: this method is called reflectively by downstream projects.
+     */
+    static void initializeDynamicObjectLayout(Class<?> dynamicObjectClass, MethodHandles.Lookup lookup) {
         assert TruffleOptions.AOT : "Only supported during image generation";
-        ((CoreLayoutFactory) getFactory()).registerLayoutClass(dynamicObjectClass.asSubclass(DynamicObject.class));
+        ((CoreLayoutFactory) getFactory()).registerLayoutClass(dynamicObjectClass.asSubclass(DynamicObject.class), lookup);
     }
 
     @SuppressWarnings("static-method")

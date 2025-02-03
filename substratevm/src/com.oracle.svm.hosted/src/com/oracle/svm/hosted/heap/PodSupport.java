@@ -24,18 +24,18 @@
  */
 package com.oracle.svm.hosted.heap;
 
-import static jdk.internal.org.objectweb.asm.Opcodes.ACC_FINAL;
-import static jdk.internal.org.objectweb.asm.Opcodes.ACC_PRIVATE;
-import static jdk.internal.org.objectweb.asm.Opcodes.ACC_PUBLIC;
-import static jdk.internal.org.objectweb.asm.Opcodes.ACC_SUPER;
-import static jdk.internal.org.objectweb.asm.Opcodes.ACC_SYNTHETIC;
-import static jdk.internal.org.objectweb.asm.Opcodes.ACONST_NULL;
-import static jdk.internal.org.objectweb.asm.Opcodes.ALOAD;
-import static jdk.internal.org.objectweb.asm.Opcodes.ARETURN;
-import static jdk.internal.org.objectweb.asm.Opcodes.INVOKESPECIAL;
-import static jdk.internal.org.objectweb.asm.Opcodes.PUTFIELD;
-import static jdk.internal.org.objectweb.asm.Opcodes.RETURN;
-import static jdk.internal.org.objectweb.asm.Opcodes.V11;
+import static com.oracle.svm.shaded.org.objectweb.asm.Opcodes.ACC_FINAL;
+import static com.oracle.svm.shaded.org.objectweb.asm.Opcodes.ACC_PRIVATE;
+import static com.oracle.svm.shaded.org.objectweb.asm.Opcodes.ACC_PUBLIC;
+import static com.oracle.svm.shaded.org.objectweb.asm.Opcodes.ACC_SUPER;
+import static com.oracle.svm.shaded.org.objectweb.asm.Opcodes.ACC_SYNTHETIC;
+import static com.oracle.svm.shaded.org.objectweb.asm.Opcodes.ACONST_NULL;
+import static com.oracle.svm.shaded.org.objectweb.asm.Opcodes.ALOAD;
+import static com.oracle.svm.shaded.org.objectweb.asm.Opcodes.ARETURN;
+import static com.oracle.svm.shaded.org.objectweb.asm.Opcodes.INVOKESPECIAL;
+import static com.oracle.svm.shaded.org.objectweb.asm.Opcodes.PUTFIELD;
+import static com.oracle.svm.shaded.org.objectweb.asm.Opcodes.RETURN;
+import static com.oracle.svm.shaded.org.objectweb.asm.Opcodes.V11;
 
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Method;
@@ -64,10 +64,10 @@ import com.oracle.svm.core.util.UserError;
 import com.oracle.svm.hosted.FeatureImpl.BeforeAnalysisAccessImpl;
 import com.oracle.svm.hosted.FeatureImpl.DuringSetupAccessImpl;
 import com.oracle.svm.hosted.NativeImageSystemClassLoader;
+import com.oracle.svm.shaded.org.objectweb.asm.ClassWriter;
+import com.oracle.svm.shaded.org.objectweb.asm.Type;
 import com.oracle.svm.util.ReflectionUtil;
 
-import jdk.internal.org.objectweb.asm.ClassWriter;
-import jdk.internal.org.objectweb.asm.Type;
 import jdk.vm.ci.meta.JavaKind;
 
 /** Support for preparing the creation of {@link Pod} objects during the image build. */
@@ -98,7 +98,7 @@ public interface PodSupport {
 
     boolean isPodClass(Class<?> clazz);
 
-    boolean mustReserveLengthField(Class<?> clazz);
+    boolean mustReserveArrayFields(Class<?> clazz);
 }
 
 @AutomaticallyRegisteredFeature
@@ -114,7 +114,7 @@ final class PodFeature implements PodSupport, InternalFeature {
      * other fields where the length field must be. If a pod subclasses {@link Object} itself, it is
      * itself included in this set.
      */
-    private final Set<Class<?>> classesNeedingLengthFields = ConcurrentHashMap.newKeySet();
+    private final Set<Class<?>> classesNeedingArrayFields = ConcurrentHashMap.newKeySet();
 
     private BeforeAnalysisAccess analysisAccess;
     private volatile boolean instantiated = false;
@@ -189,7 +189,7 @@ final class PodFeature implements PodSupport, InternalFeature {
         while (sup.getSuperclass() != Object.class) {
             sup = sup.getSuperclass();
         }
-        classesNeedingLengthFields.add(sup);
+        classesNeedingArrayFields.add(sup);
     }
 
     /**
@@ -278,8 +278,8 @@ final class PodFeature implements PodSupport, InternalFeature {
     }
 
     @Override
-    public boolean mustReserveLengthField(Class<?> clazz) {
-        return classesNeedingLengthFields.contains(clazz);
+    public boolean mustReserveArrayFields(Class<?> clazz) {
+        return classesNeedingArrayFields.contains(clazz);
     }
 
     @Override

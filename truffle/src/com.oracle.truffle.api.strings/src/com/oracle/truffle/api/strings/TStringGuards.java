@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, 2022, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2021, 2024, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -177,12 +177,28 @@ final class TStringGuards {
         return enc == Encoding.UTF_16;
     }
 
+    static boolean isUTF16FE(Encoding enc) {
+        return enc == Encoding.UTF_16_FOREIGN_ENDIAN;
+    }
+
+    static boolean isUTF16FE(int enc) {
+        return enc == Encoding.UTF_16_FOREIGN_ENDIAN.id;
+    }
+
     static boolean isUTF32(int enc) {
         return enc == Encoding.UTF_32.id;
     }
 
     static boolean isUTF32(Encoding enc) {
         return enc == Encoding.UTF_32;
+    }
+
+    static boolean isUTF32FE(Encoding enc) {
+        return enc == Encoding.UTF_32_FOREIGN_ENDIAN;
+    }
+
+    static boolean isUTF32FE(int enc) {
+        return enc == Encoding.UTF_32_FOREIGN_ENDIAN.id;
     }
 
     static boolean isUTF16Or32(Encoding enc) {

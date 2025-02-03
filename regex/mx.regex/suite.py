@@ -39,11 +39,11 @@
 # SOFTWARE.
 #
 suite = {
-  "mxversion": "6.27.1",
+  "mxversion": "7.33.0",
 
   "name" : "regex",
 
-  "version" : "24.0.0",
+  "version" : "25.0.0",
   "release" : False,
   "groupId" : "org.graalvm.regex",
   "url" : "http://www.graalvm.org/",
@@ -92,10 +92,7 @@ suite = {
         "jdk.unsupported", # sun.misc.Unsafe
       ],
       "annotationProcessors" : ["truffle:TRUFFLE_DSL_PROCESSOR"],
-      "exports" : [
-        "com.oracle.truffle.regex.chardata",
-      ],
-      "checkstyleVersion" : "10.7.0",
+      "checkstyleVersion" : "10.21.0",
       "javaCompliance" : "17+",
       "workingSets" : "Truffle,Regex",
       "spotbugsIgnoresGenerated" : True,
@@ -137,9 +134,14 @@ suite = {
     "TREGEX" : {
       "moduleInfo" : {
         "name" : "com.oracle.truffle.regex",
+        "exports": [
+            "com.oracle.truffle.regex.chardata",
+        ],
         "requires" : [
           "java.logging",
           "jdk.unsupported", # sun.misc.Unsafe
+          "org.graalvm.collections",
+          "org.graalvm.polyglot",
         ],
       },
       "subDir" : "src",
@@ -161,6 +163,9 @@ suite = {
     "TREGEX_TEST_DUMMY_LANG" : {
       "moduleInfo" : {
         "name" : "com.oracle.truffle.regex.test.dummylang",
+        "requires": [
+          "org.graalvm.truffle",
+        ],
       },
       "subDir" : "src",
       "dependencies" : ["com.oracle.truffle.regex.test.dummylang"],

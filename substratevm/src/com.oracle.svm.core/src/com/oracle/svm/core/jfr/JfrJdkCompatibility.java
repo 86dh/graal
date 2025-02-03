@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2023, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -27,18 +27,22 @@ package com.oracle.svm.core.jfr;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.time.Duration;
+import java.time.LocalDateTime;
 
-import jdk.graal.compiler.serviceprovider.JavaVersionUtil;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
+import org.graalvm.nativeimage.ProcessProperties;
 
+import com.oracle.svm.core.SubstrateOptions;
 import com.oracle.svm.core.annotate.Alias;
+import com.oracle.svm.core.annotate.Substitute;
 import com.oracle.svm.core.annotate.TargetClass;
 import com.oracle.svm.core.jdk.JDK21OrEarlier;
-import com.oracle.svm.core.jdk.JDK22OrLater;
+import com.oracle.svm.core.jdk.JDKLatest;
 import com.oracle.svm.core.util.VMError;
 import com.oracle.svm.util.ReflectionUtil;
 
+import jdk.graal.compiler.serviceprovider.JavaVersionUtil;
 import jdk.jfr.Recording;
 import jdk.jfr.internal.JVM;
 import jdk.jfr.internal.JVMSupport;
@@ -49,7 +53,6 @@ import jdk.jfr.internal.JVMSupport;
  * go away.
  */
 @SuppressWarnings("unused")
-
 public final class JfrJdkCompatibility {
     private JfrJdkCompatibility() {
     }
@@ -113,21 +116,49 @@ public final class JfrJdkCompatibility {
 
 @TargetClass(className = "jdk.jfr.internal.Utils", onlyWith = {JDK21OrEarlier.class, HasJfrSupport.class})
 final class Target_jdk_jfr_internal_Utils {
-    @Alias
-    public static native String makeFilename(Recording recording);
+    @Substitute
+    public static String makeFilename(Recording recording) {
+        return JfrFilenameUtil.makeFilename(recording);
+    }
 
     @Alias
     public static native String formatTimespan(Duration dValue, String separation);
-}
 
-@TargetClass(className = "jdk.jfr.internal.JVMSupport", onlyWith = {JDK22OrLater.class, HasJfrSupport.class})
-final class Target_jdk_jfr_internal_JVMSupport {
     @Alias
-    public static native String makeFilename(Recording recording);
+    public static native String formatDateTime(LocalDateTime time);
 }
 
-@TargetClass(className = "jdk.jfr.internal.util.ValueFormatter", onlyWith = {JDK22OrLater.class, HasJfrSupport.class})
+@TargetClass(className = "jdk.jfr.internal.JVMSupport", onlyWith = {JDKLatest.class, HasJfrSupport.class})
+final class Target_jdk_jfr_internal_JVMSupport {
+    @Substitute
+    public static String makeFilename(Recording recording) {
+        return JfrFilenameUtil.makeFilename(recording);
+    }
+}
+
+@TargetClass(className = "jdk.jfr.internal.util.ValueFormatter", onlyWith = {JDKLatest.class, HasJfrSupport.class})
 final class Target_jdk_jfr_internal_util_ValueFormatter {
     @Alias
     public static native String formatTimespan(Duration dValue, String separation);
+
+    @Alias
+    public static native String formatDateTime(LocalDateTime time);
+}
+
+final class JfrFilenameUtil {
+    public static String makeFilename(Recording recording) {
+        long pid = ProcessProperties.getProcessID();
+        String date = getFormatDateTime();
+        String idText = recording == null ? "" : "-id-" + recording.getId();
+        String imageName = SubstrateOptions.Name.getValue();
+        return imageName + "-pid-" + pid + idText + "-" + date + ".jfr";
+    }
+
+    private static String getFormatDateTime() {
+        LocalDateTime now = LocalDateTime.now();
+        if (JavaVersionUtil.JAVA_SPEC >= 24) {
+            return Target_jdk_jfr_internal_util_ValueFormatter.formatDateTime(now);
+        }
+        return Target_jdk_jfr_internal_Utils.formatDateTime(now);
+    }
 }

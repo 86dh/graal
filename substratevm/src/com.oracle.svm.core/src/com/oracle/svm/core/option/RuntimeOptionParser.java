@@ -25,26 +25,28 @@
 package com.oracle.svm.core.option;
 
 import java.util.Arrays;
-import java.util.Collection;
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Predicate;
 
 import org.graalvm.collections.EconomicMap;
-import jdk.graal.compiler.api.replacements.Fold;
-import jdk.graal.compiler.options.OptionDescriptor;
-import jdk.graal.compiler.options.OptionKey;
-import jdk.graal.compiler.options.OptionValues;
-import jdk.graal.compiler.options.OptionsParser;
 import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
 
 import com.oracle.svm.common.option.CommonOptionParser.BooleanOptionFormat;
 import com.oracle.svm.common.option.CommonOptionParser.OptionParseResult;
+import com.oracle.svm.core.IsolateArgumentParser;
 import com.oracle.svm.core.SubstrateOptions;
+import com.oracle.svm.core.graal.RuntimeCompilation;
 import com.oracle.svm.core.log.Log;
 import com.oracle.svm.core.properties.RuntimePropertyParser;
 import com.oracle.svm.core.util.ImageHeapMap;
+
+import jdk.graal.compiler.api.replacements.Fold;
+import jdk.graal.compiler.options.OptionDescriptor;
+import jdk.graal.compiler.options.OptionKey;
+import jdk.graal.compiler.options.OptionValues;
 
 /**
  * Option parser to be used by an application that runs on Substrate VM. The list of options that
@@ -71,6 +73,11 @@ public final class RuntimeOptionParser {
     private static final String LEGACY_GRAAL_OPTION_PREFIX = "-Dgraal.";
 
     /**
+     * Guard for issuing warning about deprecated Graal option prefix at most once.
+     */
+    private static final AtomicBoolean LEGACY_OPTION_DEPRECATION_WARNED = new AtomicBoolean();
+
+    /**
      * The prefix for XOptions available in an application based on Substrate VM.
      */
     static final String X_OPTION_PREFIX = "-X";
@@ -79,12 +86,20 @@ public final class RuntimeOptionParser {
      * Parse and consume all standard options and system properties supported by Substrate VM. The
      * returned array contains all arguments that were not consumed, i.e., were not recognized as
      * options.
+     *
+     * Note that this logic must be in sync with {@link IsolateArgumentParser#shouldParseArguments}.
      */
     public static String[] parseAndConsumeAllOptions(String[] initialArgs, boolean ignoreUnrecognized) {
         String[] args = initialArgs;
         if (SubstrateOptions.ParseRuntimeOptions.getValue()) {
             args = RuntimeOptionParser.singleton().parse(args, NORMAL_OPTION_PREFIX, GRAAL_OPTION_PREFIX, LEGACY_GRAAL_OPTION_PREFIX, X_OPTION_PREFIX, ignoreUnrecognized);
             args = RuntimePropertyParser.parse(args);
+        } else if (RuntimeCompilation.isEnabled() && SubstrateOptions.supportCompileInIsolates() && IsolateArgumentParser.isCompilationIsolate()) {
+            /*
+             * Compilation isolates always need to parse the Native Image options that the main
+             * isolate passes to them.
+             */
+            args = RuntimeOptionParser.singleton().parse(args, NORMAL_OPTION_PREFIX, null, null, X_OPTION_PREFIX, ignoreUnrecognized);
         }
         return args;
     }
@@ -132,6 +147,15 @@ public final class RuntimeOptionParser {
             } else if (graalOptionPrefix != null && arg.startsWith(graalOptionPrefix)) {
                 parseOptionAtRuntime(arg, graalOptionPrefix, BooleanOptionFormat.NAME_VALUE, values, ignoreUnrecognized);
             } else if (legacyGraalOptionPrefix != null && arg.startsWith(legacyGraalOptionPrefix)) {
+                String baseName = arg.substring(legacyGraalOptionPrefix.length());
+                if (LEGACY_OPTION_DEPRECATION_WARNED.compareAndExchange(false, true)) {
+                    Log log = Log.log();
+                    // Checkstyle: Allow raw info or warning printing - begin
+                    log.string("WARNING: The 'graal.' property prefix for the Graal option ").string(baseName).newline();
+                    log.string("WARNING: (and all other Graal options) is deprecated and will be ignored").newline();
+                    log.string("WARNING: in a future release. Please use 'jdk.graal.").string(baseName).string("' instead.").newline();
+                    // Checkstyle: Allow raw info or warning printing - end
+                }
                 parseOptionAtRuntime(arg, legacyGraalOptionPrefix, BooleanOptionFormat.NAME_VALUE, values, ignoreUnrecognized);
             } else if (xOptionPrefix != null && arg.startsWith(xOptionPrefix) && XOptions.parse(arg.substring(xOptionPrefix.length()), values)) {
                 // option value was already parsed and added to the map
@@ -161,7 +185,7 @@ public final class RuntimeOptionParser {
      * @throws IllegalArgumentException if {@code arg} is invalid. The parse error is described by
      *             {@link Throwable#getMessage()}.
      */
-    private void parseOptionAtRuntime(String arg, String optionPrefix, BooleanOptionFormat booleanOptionFormat, EconomicMap<OptionKey<?>, Object> values, boolean ignoreUnrecognized) {
+    public void parseOptionAtRuntime(String arg, String optionPrefix, BooleanOptionFormat booleanOptionFormat, EconomicMap<OptionKey<?>, Object> values, boolean ignoreUnrecognized) {
         Predicate<OptionKey<?>> isHosted = optionKey -> false;
         OptionParseResult parseResult = SubstrateOptionsParser.parseOption(options, isHosted, arg.substring(optionPrefix.length()), values, optionPrefix, booleanOptionFormat);
         if (parseResult.printFlags() || parseResult.printFlagsWithExtraHelp()) {
@@ -190,20 +214,6 @@ public final class RuntimeOptionParser {
             }
             log.newline();
         }
-    }
-
-    public OptionKey<?> lookupOption(String name, Collection<OptionDescriptor> fuzzyMatches) {
-        OptionDescriptor desc = options.get(name);
-        OptionKey<?> option;
-        if (desc == null) {
-            if (fuzzyMatches != null) {
-                OptionsParser.collectFuzzyMatches(options.getValues(), name, fuzzyMatches);
-            }
-            option = null;
-        } else {
-            option = desc.getOptionKey();
-        }
-        return option;
     }
 
     public Iterable<OptionDescriptor> getDescriptors() {

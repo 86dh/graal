@@ -1,5 +1,5 @@
 #
-# Copyright (c) 2016, 2023, Oracle and/or its affiliates.
+# Copyright (c) 2016, 2024, Oracle and/or its affiliates.
 #
 # All rights reserved.
 #
@@ -29,7 +29,7 @@
 #
 import sys
 import os
-import pipes
+import shlex
 import tempfile
 from os.path import join
 import shutil
@@ -166,18 +166,20 @@ mx_subst.path_substitutions.register_no_arg('jacoco', get_jacoco_setting)
 def _subst_get_jvm_args(dep):
     java = mx.get_jdk().java
     main_class = mx.distribution(dep).mainClass
-    jvm_args = [pipes.quote(arg) for arg in mx.get_runtime_jvm_args([dep])]
+    jvm_args = [shlex.quote(arg) for arg in mx.get_runtime_jvm_args([dep])]
     cmd = [java] + jvm_args + [main_class]
     return " ".join(cmd)
 
 
 mx_subst.path_substitutions.register_with_arg('get_jvm_cmd_line', _subst_get_jvm_args)
 
-mx.add_argument('--jacoco-exec-file', help='the coverage result file of JaCoCo', default='jacoco.exec')
+mx.add_argument('--jacoco-exec-file', help='the coverage result file of JaCoCo. Deprecated: use --jacoco-dest-file', default=None)
 
 
 def mx_post_parse_cmd_line(opts):
-    mx_gate.JACOCO_EXEC = opts.jacoco_exec_file
+    if opts.jacoco_exec_file is not None:
+        mx.warn("--jacoco-exec-file is deprecated, please use --jacoco-dest-file instead")
+        mx_gate.JACOCO_EXEC = opts.jacoco_exec_file
 
 
 @mx.command(_suite.name, 'llvm-tool', 'Run a tool from the LLVM_TOOLCHAIN distribution')
@@ -410,7 +412,7 @@ class ToolchainConfig(object):
         "BINUTIL": ["graalvm-{name}-binutil"] + _llvm_tool_map + ["llvm-" + i for i in _llvm_tool_map]
     }
 
-    def __init__(self, name, dist, bootstrap_dist, tools, suite, select_flags=None):
+    def __init__(self, name, dist, bootstrap_dist, tools, suite, tool_map_templ=None, select_flags=None):
         self.name = name
         self.dist = dist if isinstance(dist, list) else [dist]
         self.bootstrap_provider = create_toolchain_root_provider(name, bootstrap_dist)
@@ -420,7 +422,9 @@ class ToolchainConfig(object):
         self.suite = suite
         self.select_flags = select_flags or []
         self.mx_command = self.name + '-toolchain'
-        self.tool_map = {tool: [_exe_sub(alias.format(name=name)) for alias in aliases] for tool, aliases in ToolchainConfig._tool_map.items()}
+        if tool_map_templ is None:
+            tool_map_templ = ToolchainConfig._tool_map
+        self.tool_map = {tool: [_exe_sub(alias.format(name=name)) for alias in aliases] for tool, aliases in tool_map_templ.items()}
         self.path_map = {_exe_sub(path): tool for tool, aliases in self.tool_map.items() for path in aliases}
         # register mx command
         mx.update_commands(_suite, {

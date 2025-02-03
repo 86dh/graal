@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2019, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -83,6 +83,7 @@ import org.graalvm.wasm.WasmFunctionInstance;
 import org.graalvm.wasm.WasmInstance;
 import org.graalvm.wasm.WasmLanguage;
 import org.graalvm.wasm.memory.WasmMemory;
+import org.graalvm.wasm.memory.WasmMemoryLibrary;
 import org.graalvm.wasm.test.options.WasmTestOptions;
 import org.graalvm.wasm.utils.WasmBinaryTools;
 import org.graalvm.wasm.utils.cases.WasmCase;
@@ -235,7 +236,7 @@ public abstract class WasmFileSuite extends AbstractWasmSuite {
                     final boolean reinitMemory = requiresZeroMemory || iterationNeedsStateCheck(i + 1);
                     if (reinitMemory) {
                         for (int j = 0; j < wasmContext.memories().count(); ++j) {
-                            wasmContext.memories().memory(j).reset();
+                            WasmMemoryLibrary.getUncached().reset(wasmContext.memories().memory(j));
                         }
                         for (int j = 0; j < wasmContext.tables().tableCount(); ++j) {
                             wasmContext.tables().table(j).reset();
@@ -309,10 +310,6 @@ public abstract class WasmFileSuite extends AbstractWasmSuite {
                 contextBuilder.option("log.wasm.level", WasmTestOptions.LOG_LEVEL);
             }
 
-            if (WasmTestOptions.STORE_CONSTANTS_POLICY != null && !WasmTestOptions.STORE_CONSTANTS_POLICY.equals("")) {
-                contextBuilder.option("wasm.StoreConstantsPolicy", WasmTestOptions.STORE_CONSTANTS_POLICY);
-                System.out.println("wasm.StoreConstantsPolicy: " + WasmTestOptions.STORE_CONSTANTS_POLICY);
-            }
             contextBuilder.option("wasm.Builtins", includedExternalModules());
             contextBuilder.option("wasm.WasiConstantRandomGet", "true");
             final String commandLineArgs = testCase.options().getProperty("command-line-args");
@@ -371,7 +368,7 @@ public abstract class WasmFileSuite extends AbstractWasmSuite {
 
             runInContexts(testCase, contextBuilder, sources, sharedEngine, testOut);
         } catch (InterruptedException | IOException e) {
-            Assert.fail(String.format("Test %s failed: %s", testCase.name(), e.getMessage()));
+            throw new RuntimeException(String.format("Test %s failed: %s", testCase.name(), e.getMessage()));
         } finally {
             if (tempWorkingDirectory != null) {
                 deleteFolder(tempWorkingDirectory.toFile());
@@ -385,6 +382,10 @@ public abstract class WasmFileSuite extends AbstractWasmSuite {
         if (sharedEngine == null) {
             // Run in interpreted mode, with inlining turned off, to ensure profiles are populated.
             int interpreterIterations = Integer.parseInt(testCase.options().getProperty("interpreter-iterations", String.valueOf(DEFAULT_INTERPRETER_ITERATIONS)));
+            if (WasmTestOptions.COVERAGE_MODE) {
+                interpreterIterations = Math.min(interpreterIterations, 1);
+            }
+
             context = contextBuilder.options(getInterpretedNoInline()).build();
             runInContext(testCase, context, sources, interpreterIterations, PHASE_INTERPRETER_ICON, "interpreter", testOut);
 
@@ -392,6 +393,9 @@ public abstract class WasmFileSuite extends AbstractWasmSuite {
             // We need to run the test at least twice like this, since the first run will lead to
             // de-opts due to empty profiles.
             int syncNoinlineIterations = Integer.parseInt(testCase.options().getProperty("sync-noinline-iterations", String.valueOf(DEFAULT_SYNC_NOINLINE_ITERATIONS)));
+            if (WasmTestOptions.COVERAGE_MODE) {
+                syncNoinlineIterations = Math.min(syncNoinlineIterations, 1);
+            }
             context = contextBuilder.options(getSyncCompiledNoInline()).build();
             runInContext(testCase, context, sources, syncNoinlineIterations, PHASE_SYNC_NO_INLINE_ICON, "sync,no-inl", testOut);
 
@@ -399,17 +403,26 @@ public abstract class WasmFileSuite extends AbstractWasmSuite {
             // We need to run the test at least twice like this, since the first run will lead to
             // de-opts due to empty profiles.
             int syncInlineIterations = Integer.parseInt(testCase.options().getProperty("sync-inline-iterations", String.valueOf(DEFAULT_SYNC_INLINE_ITERATIONS)));
+            if (WasmTestOptions.COVERAGE_MODE) {
+                syncInlineIterations = Math.min(syncInlineIterations, 1);
+            }
             context = contextBuilder.options(getSyncCompiledWithInline()).build();
             runInContext(testCase, context, sources, syncInlineIterations, PHASE_SYNC_INLINE_ICON, "sync,inl", testOut);
 
             // Run with normal, asynchronous compilation.
             int asyncIterations = Integer.parseInt(testCase.options().getProperty("async-iterations", String.valueOf(DEFAULT_ASYNC_ITERATIONS)));
+            if (WasmTestOptions.COVERAGE_MODE) {
+                asyncIterations = Math.min(asyncIterations, 1);
+            }
             context = contextBuilder.options(getAsyncCompiled()).build();
             runInContext(testCase, context, sources, asyncIterations, PHASE_ASYNC_ICON, "async,multi", testOut);
         } else {
             int asyncSharedIterations = testCase.options().containsKey("async-iterations") && !testCase.options().containsKey("async-shared-iterations")
                             ? Integer.parseInt(testCase.options().getProperty("async-iterations")) / 10
                             : Integer.parseInt(testCase.options().getProperty("async-shared-iterations", String.valueOf(DEFAULT_ASYNC_SHARED_ITERATIONS)));
+            if (WasmTestOptions.COVERAGE_MODE) {
+                asyncSharedIterations = Math.min(asyncSharedIterations, 1);
+            }
             context = contextBuilder.build();
             runInContext(testCase, context, sources, asyncSharedIterations, PHASE_SHARED_ENGINE_ICON, "async,shared", testOut);
         }
@@ -421,7 +434,7 @@ public abstract class WasmFileSuite extends AbstractWasmSuite {
 
     private static void validateThrown(WasmCaseData data, WasmCaseData.ErrorType phase, PolyglotException e) throws PolyglotException {
         if (data.expectedErrorMessage() == null || !data.expectedErrorMessage().equals(e.getMessage())) {
-            throw e;
+            throw new AssertionError("Expected error message [%s] but was: [%s]".formatted(data.expectedErrorMessage(), e.getMessage()), e);
         }
         Assert.assertEquals("Unexpected error phase.", data.expectedErrorTime(), phase);
     }
@@ -575,7 +588,7 @@ public abstract class WasmFileSuite extends AbstractWasmSuite {
 
     private static ContextState saveContext(WasmContext context) {
         final MemoryRegistry memories = context.memories().duplicate();
-        final GlobalRegistry globals = context.globals().duplicate(context.getContextOptions().supportBulkMemoryAndRefTypes());
+        final GlobalRegistry globals = context.globals().duplicate();
         return new ContextState(memories, globals, context.fdManager().size());
     }
 
@@ -590,11 +603,12 @@ public abstract class WasmFileSuite extends AbstractWasmSuite {
             if (expectedMemory == null) {
                 Assert.assertNull("Memory should be null", actualMemory);
             } else {
+                WasmMemoryLibrary memories = WasmMemoryLibrary.getUncached();
                 Assert.assertNotNull("Memory should not be null", actualMemory);
-                Assert.assertEquals("Mismatch in memory lengths", expectedMemory.byteSize(), actualMemory.byteSize());
-                for (int ptr = 0; ptr < expectedMemory.byteSize(); ptr++) {
-                    byte expectedByte = (byte) expectedMemory.load_i32_8s(null, ptr);
-                    byte actualByte = (byte) actualMemory.load_i32_8s(null, ptr);
+                Assert.assertEquals("Mismatch in memory lengths", memories.byteSize(expectedMemory), memories.byteSize(actualMemory));
+                for (int ptr = 0; ptr < memories.byteSize(expectedMemory); ptr++) {
+                    byte expectedByte = (byte) memories.load_i32_8s(expectedMemory, null, ptr);
+                    byte actualByte = (byte) memories.load_i32_8s(actualMemory, null, ptr);
                     Assert.assertEquals("Memory mismatch at offset " + ptr + ",", expectedByte, actualByte);
                 }
             }

@@ -40,13 +40,13 @@ public final class GuardedInlinedMethodNode extends InlinedMethodNode {
     }
 
     @Override
-    public int execute(VirtualFrame frame) {
+    public int execute(VirtualFrame frame, boolean isContinuationResume) {
         preludeChecks(frame);
         if (guard.isValid(getContext(), method, frame, this)) {
             return executeBody(frame);
         } else {
             CompilerDirectives.transferToInterpreterAndInvalidate();
-            return getBytecodeNode().reQuickenInvoke(frame, top, opcode, getCallerBCI(), statementIndex, method.getMethod());
+            return getBytecodeNode().reQuickenInvoke(frame, top, opcode, getCallerBCI(), statementIndex);
         }
     }
 }

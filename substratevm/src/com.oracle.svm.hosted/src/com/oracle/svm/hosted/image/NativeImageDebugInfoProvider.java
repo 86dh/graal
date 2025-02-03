@@ -25,6 +25,9 @@
  */
 package com.oracle.svm.hosted.image;
 
+import static com.oracle.objectfile.debuginfo.DebugInfoProvider.DebugFrameSizeChange.Type.CONTRACT;
+import static com.oracle.objectfile.debuginfo.DebugInfoProvider.DebugFrameSizeChange.Type.EXTEND;
+
 import java.lang.reflect.Modifier;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -39,12 +42,6 @@ import java.util.function.Predicate;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
-import jdk.graal.compiler.code.CompilationResult;
-import jdk.graal.compiler.debug.DebugContext;
-import jdk.graal.compiler.graph.NodeSourcePosition;
-import jdk.graal.compiler.java.StableMethodNameFormatter;
-import jdk.vm.ci.code.CallingConvention;
-import jdk.vm.ci.meta.AllocatableValue;
 import org.graalvm.collections.EconomicMap;
 import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.c.struct.CPointerTo;
@@ -62,6 +59,7 @@ import com.oracle.svm.core.code.CompilationResultFrameTree.CallNode;
 import com.oracle.svm.core.code.CompilationResultFrameTree.FrameNode;
 import com.oracle.svm.core.code.CompilationResultFrameTree.Visitor;
 import com.oracle.svm.core.config.ConfigurationValues;
+import com.oracle.svm.core.config.ObjectLayout;
 import com.oracle.svm.core.graal.code.SubstrateBackend.SubstrateMarkId;
 import com.oracle.svm.core.graal.meta.RuntimeConfiguration;
 import com.oracle.svm.core.image.ImageHeapPartition;
@@ -91,13 +89,20 @@ import com.oracle.svm.hosted.substitute.SubstitutionField;
 import com.oracle.svm.hosted.substitute.SubstitutionMethod;
 import com.oracle.svm.util.ClassUtil;
 
+import jdk.graal.compiler.code.CompilationResult;
+import jdk.graal.compiler.debug.DebugContext;
+import jdk.graal.compiler.graph.NodeSourcePosition;
+import jdk.graal.compiler.java.StableMethodNameFormatter;
+import jdk.graal.compiler.util.Digest;
 import jdk.vm.ci.aarch64.AArch64;
 import jdk.vm.ci.amd64.AMD64;
 import jdk.vm.ci.code.BytecodeFrame;
 import jdk.vm.ci.code.BytecodePosition;
+import jdk.vm.ci.code.CallingConvention;
 import jdk.vm.ci.code.Register;
 import jdk.vm.ci.code.RegisterValue;
 import jdk.vm.ci.code.StackSlot;
+import jdk.vm.ci.meta.AllocatableValue;
 import jdk.vm.ci.meta.JavaConstant;
 import jdk.vm.ci.meta.JavaKind;
 import jdk.vm.ci.meta.JavaValue;
@@ -110,9 +115,6 @@ import jdk.vm.ci.meta.ResolvedJavaMethod;
 import jdk.vm.ci.meta.ResolvedJavaType;
 import jdk.vm.ci.meta.Signature;
 import jdk.vm.ci.meta.Value;
-
-import static com.oracle.objectfile.debuginfo.DebugInfoProvider.DebugFrameSizeChange.Type.CONTRACT;
-import static com.oracle.objectfile.debuginfo.DebugInfoProvider.DebugFrameSizeChange.Type.EXTEND;
 
 /**
  * Implementation of the DebugInfoProvider API interface that allows type, code and heap data info
@@ -186,10 +188,7 @@ class NativeImageDebugInfoProvider extends NativeImageDebugInfoProviderBase impl
             } else {
                 javaType = method.getDeclaringClass();
             }
-            Class<?> clazz = null;
-            if (javaType instanceof OriginalClassProvider) {
-                clazz = ((OriginalClassProvider) javaType).getJavaClass();
-            }
+            Class<?> clazz = OriginalClassProvider.getJavaClass(javaType);
             SourceManager sourceManager = ImageSingletons.lookup(SourceManager.class);
             try (DebugContext.Scope s = debugContext.scope("DebugFileInfo", javaType)) {
                 fullFilePath = sourceManager.findAndCacheSource(javaType, clazz, debugContext);
@@ -248,6 +247,11 @@ class NativeImageDebugInfoProvider extends NativeImageDebugInfoProviderBase impl
             } catch (Throwable e) {
                 throw debugContext.handle(e);
             }
+        }
+
+        @Override
+        public long typeSignature(String prefix) {
+            return Digest.digestAsUUID(prefix + typeName()).getLeastSignificantBits();
         }
 
         public String toJavaName(@SuppressWarnings("hiding") HostedType hostedType) {
@@ -335,6 +339,11 @@ class NativeImageDebugInfoProvider extends NativeImageDebugInfoProviderBase impl
         @Override
         public String typeName() {
             return typeName;
+        }
+
+        @Override
+        public long typeSignature(String prefix) {
+            return Digest.digestAsUUID(typeName).getLeastSignificantBits();
         }
 
         @Override
@@ -428,24 +437,16 @@ class NativeImageDebugInfoProvider extends NativeImageDebugInfoProviderBase impl
     }
 
     private Stream<DebugTypeInfo> computeHeaderTypeInfo() {
+        ObjectLayout ol = getObjectLayout();
+
         List<DebugTypeInfo> infos = new LinkedList<>();
-        int hubOffset = getObjectLayout().getHubOffset();
-        int hubFieldSize = referenceSize;
-        int objHeaderSize = hubOffset + hubFieldSize;
+        int hubOffset = ol.getHubOffset();
 
-        int idHashSize = getObjectLayout().sizeInBytes(JavaKind.Int);
-        int fixedIdHashOffset = -1;
-        if (getObjectLayout().hasFixedIdentityHashField()) {
-            fixedIdHashOffset = getObjectLayout().getFixedIdentityHashOffset();
-            objHeaderSize = Math.max(objHeaderSize, fixedIdHashOffset + idHashSize);
-        }
-
-        /* We need array headers for all Java kinds */
-
-        NativeImageHeaderTypeInfo objHeader = new NativeImageHeaderTypeInfo("_objhdr", objHeaderSize);
-        objHeader.addField("hub", hubType, hubOffset, hubFieldSize);
-        if (fixedIdHashOffset >= 0) {
-            objHeader.addField("idHash", javaKindToHostedType.get(JavaKind.Int), fixedIdHashOffset, idHashSize);
+        NativeImageHeaderTypeInfo objHeader = new NativeImageHeaderTypeInfo("_objhdr", ol.getFirstFieldOffset());
+        objHeader.addField("hub", hubType, hubOffset, referenceSize);
+        if (ol.isIdentityHashFieldInObjectHeader()) {
+            int idHashSize = ol.sizeInBytes(JavaKind.Int);
+            objHeader.addField("idHash", javaKindToHostedType.get(JavaKind.Int), ol.getObjectHeaderIdentityHashOffset(), idHashSize);
         }
         infos.add(objHeader);
 
@@ -470,13 +471,17 @@ class NativeImageDebugInfoProvider extends NativeImageDebugInfoProviderBase impl
         }
 
         @Override
+        public long typeSignature(String prefix) {
+            return super.typeSignature(prefix + loaderName());
+        }
+
+        @Override
         public DebugTypeKind typeKind() {
             return DebugTypeKind.INSTANCE;
         }
 
         @Override
         public String loaderName() {
-
             return UniqueShortNameProvider.singleton().uniqueShortLoaderName(hostedType.getJavaClass().getClassLoader());
         }
 
@@ -770,7 +775,7 @@ class NativeImageDebugInfoProvider extends NativeImageDebugInfoProviderBase impl
 
         @Override
         public int size() {
-            return structFieldInfo.getSizeInfo().getProperty();
+            return structFieldInfo.getSizeInBytes();
         }
 
         @Override
@@ -825,6 +830,19 @@ class NativeImageDebugInfoProvider extends NativeImageDebugInfoProviderBase impl
         }
 
         @Override
+        public long typeSignature(String prefix) {
+            HostedType elementType = hostedType.getComponentType();
+            while (elementType.isArray()) {
+                elementType = elementType.getComponentType();
+            }
+            String loaderId = "";
+            if (elementType.isInstanceClass() || elementType.isInterface() || elementType.isEnum()) {
+                loaderId = UniqueShortNameProvider.singleton().uniqueShortLoaderName(elementType.getJavaClass().getClassLoader());
+            }
+            return super.typeSignature(prefix + loaderId);
+        }
+
+        @Override
         public DebugTypeKind typeKind() {
             return DebugTypeKind.ARRAY;
         }
@@ -857,6 +875,15 @@ class NativeImageDebugInfoProvider extends NativeImageDebugInfoProviderBase impl
         NativeImageDebugPrimitiveTypeInfo(HostedPrimitiveType primitiveType) {
             super(primitiveType);
             this.primitiveType = primitiveType;
+        }
+
+        @Override
+        public long typeSignature(String prefix) {
+            /*
+             * primitive types never need an indirection so use the same signature for places where
+             * we might want a special type
+             */
+            return super.typeSignature("");
         }
 
         @Override
@@ -2617,11 +2644,6 @@ class NativeImageDebugInfoProvider extends NativeImageDebugInfoProviderBase impl
         @Override
         public long getOffset() {
             return objectInfo.getOffset();
-        }
-
-        @Override
-        public long getAddress() {
-            return objectInfo.getAddress();
         }
 
         @Override

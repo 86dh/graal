@@ -24,7 +24,7 @@
  */
 package com.oracle.svm.core.heap.dump;
 
-import jdk.graal.compiler.api.replacements.Fold;
+import jdk.graal.compiler.word.Word;
 import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
@@ -34,11 +34,9 @@ import org.graalvm.nativeimage.c.struct.RawPointerTo;
 import org.graalvm.nativeimage.c.struct.RawStructure;
 import org.graalvm.nativeimage.c.struct.SizeOf;
 import org.graalvm.nativeimage.c.type.CCharPointer;
-import org.graalvm.nativeimage.impl.UnmanagedMemorySupport;
 import org.graalvm.word.Pointer;
 import org.graalvm.word.PointerBase;
 import org.graalvm.word.UnsignedWord;
-import org.graalvm.word.WordFactory;
 
 import com.oracle.svm.core.BuildPhaseProvider.AfterCompilation;
 import com.oracle.svm.core.c.NonmovableArrays;
@@ -47,10 +45,14 @@ import com.oracle.svm.core.heap.Heap;
 import com.oracle.svm.core.heap.ObjectVisitor;
 import com.oracle.svm.core.heap.UnknownObjectField;
 import com.oracle.svm.core.hub.DynamicHub;
+import com.oracle.svm.core.memory.NullableNativeMemory;
+import com.oracle.svm.core.nmt.NmtCategory;
 import com.oracle.svm.core.util.coder.ByteStream;
 import com.oracle.svm.core.util.coder.ByteStreamAccess;
 import com.oracle.svm.core.util.coder.NativeCoder;
 import com.oracle.svm.core.util.coder.Pack200Coder;
+
+import jdk.graal.compiler.api.replacements.Fold;
 
 /**
  * Provides access to the encoded heap dump metadata that was prepared at image build-time.
@@ -139,20 +141,20 @@ public class HeapDumpMetadata {
          * encoded data more efficiently. At first, we allocate some memory for those data
          * structures so that we can abort right away in case that an allocation fails.
          */
-        UnsignedWord classInfosSize = WordFactory.unsigned(classInfoCount).multiply(SizeOf.get(ClassInfo.class));
-        classInfos = ImageSingletons.lookup(UnmanagedMemorySupport.class).calloc(classInfosSize);
+        UnsignedWord classInfosSize = Word.unsigned(classInfoCount).multiply(SizeOf.get(ClassInfo.class));
+        classInfos = NullableNativeMemory.calloc(classInfosSize, NmtCategory.HeapDump);
         if (classInfos.isNull()) {
             return false;
         }
 
-        UnsignedWord fieldStartsSize = WordFactory.unsigned(totalFieldCount).multiply(SizeOf.get(FieldInfoPointer.class));
-        fieldInfoTable = ImageSingletons.lookup(UnmanagedMemorySupport.class).calloc(fieldStartsSize);
+        UnsignedWord fieldStartsSize = Word.unsigned(totalFieldCount).multiply(SizeOf.get(FieldInfoPointer.class));
+        fieldInfoTable = NullableNativeMemory.calloc(fieldStartsSize, NmtCategory.HeapDump);
         if (fieldInfoTable.isNull()) {
             return false;
         }
 
-        UnsignedWord fieldNameTableSize = WordFactory.unsigned(fieldNameCount).multiply(SizeOf.get(FieldNamePointer.class));
-        fieldNameTable = ImageSingletons.lookup(UnmanagedMemorySupport.class).calloc(fieldNameTableSize);
+        UnsignedWord fieldNameTableSize = Word.unsigned(fieldNameCount).multiply(SizeOf.get(FieldNamePointer.class));
+        fieldNameTable = NullableNativeMemory.calloc(fieldNameTableSize, NmtCategory.HeapDump);
         if (fieldNameTable.isNull()) {
             return false;
         }
@@ -214,14 +216,14 @@ public class HeapDumpMetadata {
      * Must always be called, regardless if {@link #initialize} returned true or false.
      */
     public void teardown() {
-        ImageSingletons.lookup(UnmanagedMemorySupport.class).free(classInfos);
-        classInfos = WordFactory.nullPointer();
+        NullableNativeMemory.free(classInfos);
+        classInfos = Word.nullPointer();
 
-        ImageSingletons.lookup(UnmanagedMemorySupport.class).free(fieldInfoTable);
-        fieldInfoTable = WordFactory.nullPointer();
+        NullableNativeMemory.free(fieldInfoTable);
+        fieldInfoTable = Word.nullPointer();
 
-        ImageSingletons.lookup(UnmanagedMemorySupport.class).free(fieldNameTable);
-        fieldNameTable = WordFactory.nullPointer();
+        NullableNativeMemory.free(fieldNameTable);
+        fieldNameTable = Word.nullPointer();
     }
 
     public int getClassInfoCount() {
@@ -230,14 +232,14 @@ public class HeapDumpMetadata {
 
     public ClassInfo getClassInfo(Class<?> clazz) {
         if (clazz == null) {
-            return WordFactory.nullPointer();
+            return Word.nullPointer();
         }
         return getClassInfo(DynamicHub.fromClass(clazz));
     }
 
     public ClassInfo getClassInfo(DynamicHub hub) {
         if (hub == null) {
-            return WordFactory.nullPointer();
+            return Word.nullPointer();
         }
         return getClassInfo(hub.getTypeID());
     }
@@ -424,7 +426,7 @@ public class HeapDumpMetadata {
         FieldName read();
     }
 
-    private static class ComputeHubDataVisitor implements ObjectVisitor {
+    private static final class ComputeHubDataVisitor implements ObjectVisitor {
         private int classSerialNum;
 
         public void initialize() {

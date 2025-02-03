@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2019, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -40,7 +40,12 @@
  */
 package org.graalvm.wasm.test;
 
-import com.oracle.truffle.api.TruffleLanguage;
+import static org.graalvm.wasm.test.WasmTestUtils.hexStringToByteArray;
+import static org.graalvm.wasm.utils.WasmBinaryTools.compileWat;
+
+import java.io.IOException;
+import java.util.Set;
+
 import org.graalvm.polyglot.Context;
 import org.graalvm.polyglot.PolyglotException;
 import org.graalvm.polyglot.Source;
@@ -49,14 +54,11 @@ import org.graalvm.polyglot.io.ByteSequence;
 import org.graalvm.wasm.WasmContext;
 import org.graalvm.wasm.WasmLanguage;
 import org.graalvm.wasm.memory.UnsafeWasmMemory;
-import org.graalvm.wasm.utils.Assert;
+import org.graalvm.wasm.memory.WasmMemoryLibrary;
+import org.junit.Assert;
 import org.junit.Test;
 
-import java.io.IOException;
-import java.util.Set;
-
-import static org.graalvm.wasm.test.WasmTestUtils.hexStringToByteArray;
-import static org.graalvm.wasm.utils.WasmBinaryTools.compileWat;
+import com.oracle.truffle.api.TruffleLanguage;
 
 public class WasmPolyglotTestSuite {
     @Test
@@ -65,7 +67,7 @@ public class WasmPolyglotTestSuite {
             context.parse(Source.newBuilder(WasmLanguage.ID, ByteSequence.create(new byte[0]), "someName").build());
         } catch (PolyglotException pex) {
             Assert.assertTrue("Must be a syntax error.", pex.isSyntaxError());
-            Assert.assertTrue("Must not be an internal error.", !pex.isInternalError());
+            Assert.assertFalse("Must not be an internal error.", pex.isInternalError());
         }
     }
 
@@ -93,6 +95,8 @@ public class WasmPolyglotTestSuite {
         Source source = sourceBuilder.build();
         contextBuilder.allowExperimentalOptions(true);
         contextBuilder.option("wasm.UseUnsafeMemory", "true");
+        // Force use of UnsafeWasmMemory
+        contextBuilder.option("wasm.DirectByteBufferMemoryAccess", "true");
         Context context = contextBuilder.build();
         context.enter();
         context.eval(source);
@@ -100,9 +104,9 @@ public class WasmPolyglotTestSuite {
         mainModule.getMember("main").execute();
         final TruffleLanguage.Env env = WasmContext.get(null).environment();
         final UnsafeWasmMemory memory = (UnsafeWasmMemory) env.asGuestValue(mainModule.getMember("memory"));
-        Assert.assertTrue("Memory should have been allocated.", !memory.freed());
+        Assert.assertFalse("Memory should have been allocated.", WasmMemoryLibrary.getUncached().freed(memory));
         context.close();
-        Assert.assertTrue("Memory should have been freed.", memory.freed());
+        Assert.assertTrue("Memory should have been freed.", WasmMemoryLibrary.getUncached().freed(memory));
     }
 
     @Test
@@ -133,7 +137,7 @@ public class WasmPolyglotTestSuite {
                     mainFunction.execute();
                     Assert.fail("Should have thrown");
                 } catch (PolyglotException pex) {
-                    Assert.assertTrue("Should not throw internal error", !pex.isInternalError());
+                    Assert.assertFalse("Should not throw internal error", pex.isInternalError());
                 }
             }
         }
@@ -157,19 +161,14 @@ public class WasmPolyglotTestSuite {
     @Test
     public void deeplyNestedBrIf() throws IOException, InterruptedException {
         // This code resembles the deeply nested br_if in WebAssembly part of undici
-        StringBuilder wat = new StringBuilder();
         int depth = 256;
-        wat.append("(module (func (export \"main\") (result i32) (block $my_block ");
-        for (int i = 0; i < depth; i++) {
-            wat.append("(block ");
-        }
-        wat.append("i32.const 0 br_if $my_block i32.const 35 i32.const 0 drop drop");
-        for (int i = 0; i < depth; i++) {
-            wat.append(")");
-        }
-        wat.append(") i32.const 42))");
+        final String wat = "(module (func (export \"main\") (result i32) (block $my_block " +
+                        "(block ".repeat(depth) +
+                        "i32.const 0 br_if $my_block i32.const 35 i32.const 0 drop drop" +
+                        ")".repeat(depth) +
+                        ") i32.const 42))";
 
-        ByteSequence bytes = ByteSequence.create(compileWat("test", wat.toString()));
+        ByteSequence bytes = ByteSequence.create(compileWat("test", wat));
         Source source = Source.newBuilder(WasmLanguage.ID, bytes, "main").build();
         try (Context context = Context.create(WasmLanguage.ID)) {
             context.eval(source);

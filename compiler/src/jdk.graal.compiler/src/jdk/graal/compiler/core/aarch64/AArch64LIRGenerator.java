@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -55,6 +55,7 @@ import jdk.graal.compiler.lir.aarch64.AArch64AddressValue;
 import jdk.graal.compiler.lir.aarch64.AArch64ArithmeticOp;
 import jdk.graal.compiler.lir.aarch64.AArch64ArrayCompareToOp;
 import jdk.graal.compiler.lir.aarch64.AArch64ArrayCopyWithConversionsOp;
+import jdk.graal.compiler.lir.aarch64.AArch64ArrayFillOp;
 import jdk.graal.compiler.lir.aarch64.AArch64ArrayEqualsOp;
 import jdk.graal.compiler.lir.aarch64.AArch64ArrayIndexOfOp;
 import jdk.graal.compiler.lir.aarch64.AArch64ArrayRegionCompareToOp;
@@ -88,6 +89,7 @@ import jdk.graal.compiler.lir.aarch64.AArch64MD5Op;
 import jdk.graal.compiler.lir.aarch64.AArch64Move;
 import jdk.graal.compiler.lir.aarch64.AArch64Move.MembarOp;
 import jdk.graal.compiler.lir.aarch64.AArch64PauseOp;
+import jdk.graal.compiler.lir.aarch64.AArch64ReadTimestampCounter;
 import jdk.graal.compiler.lir.aarch64.AArch64SHA1Op;
 import jdk.graal.compiler.lir.aarch64.AArch64SHA256Op;
 import jdk.graal.compiler.lir.aarch64.AArch64SHA3Op;
@@ -95,11 +97,12 @@ import jdk.graal.compiler.lir.aarch64.AArch64SHA512Op;
 import jdk.graal.compiler.lir.aarch64.AArch64SpeculativeBarrier;
 import jdk.graal.compiler.lir.aarch64.AArch64StringLatin1InflateOp;
 import jdk.graal.compiler.lir.aarch64.AArch64StringUTF16CompressOp;
+import jdk.graal.compiler.lir.aarch64.AArch64VectorizedHashCodeOp;
 import jdk.graal.compiler.lir.aarch64.AArch64VectorizedMismatchOp;
 import jdk.graal.compiler.lir.aarch64.AArch64ZapRegistersOp;
 import jdk.graal.compiler.lir.aarch64.AArch64ZapStackOp;
 import jdk.graal.compiler.lir.aarch64.AArch64ZeroMemoryOp;
-import jdk.graal.compiler.lir.gen.BarrierSetLIRGenerator;
+import jdk.graal.compiler.lir.gen.BarrierSetLIRGeneratorTool;
 import jdk.graal.compiler.lir.gen.LIRGenerationResult;
 import jdk.graal.compiler.lir.gen.LIRGenerator;
 import jdk.graal.compiler.lir.gen.MoveFactory;
@@ -119,7 +122,7 @@ import jdk.vm.ci.meta.ValueKind;
 
 public abstract class AArch64LIRGenerator extends LIRGenerator {
 
-    public AArch64LIRGenerator(LIRKindTool lirKindTool, AArch64ArithmeticLIRGenerator arithmeticLIRGen, BarrierSetLIRGenerator barrierSetLIRGen, MoveFactory moveFactory, Providers providers,
+    public AArch64LIRGenerator(LIRKindTool lirKindTool, AArch64ArithmeticLIRGenerator arithmeticLIRGen, BarrierSetLIRGeneratorTool barrierSetLIRGen, MoveFactory moveFactory, Providers providers,
                     LIRGenerationResult lirGenRes) {
         super(lirKindTool, arithmeticLIRGen, barrierSetLIRGen, moveFactory, providers, lirGenRes);
     }
@@ -134,11 +137,6 @@ public abstract class AArch64LIRGenerator extends LIRGenerator {
             return emitMove(val);
         }
         return val;
-    }
-
-    @Override
-    public AArch64BarrierSetLIRGenerator getBarrierSet() {
-        return (AArch64BarrierSetLIRGenerator) super.getBarrierSet();
     }
 
     /**
@@ -243,8 +241,8 @@ public abstract class AArch64LIRGenerator extends LIRGenerator {
 
     protected void emitCompareAndSwapOp(boolean isLogicVariant, Value address, MemoryOrderMode memoryOrder, AArch64Kind memKind, Variable result, AllocatableValue allocatableExpectedValue,
                     AllocatableValue allocatableNewValue, BarrierType barrierType) {
-        if (barrierType != BarrierType.NONE && getBarrierSet() != null) {
-            getBarrierSet().emitCompareAndSwapOp(isLogicVariant, address, memoryOrder, memKind, result, allocatableExpectedValue, allocatableNewValue, barrierType);
+        if (barrierType != BarrierType.NONE && getBarrierSet() instanceof AArch64ReadBarrierSetLIRGenerator barrierSetLIRGenerator) {
+            barrierSetLIRGenerator.emitCompareAndSwapOp(this, isLogicVariant, address, memoryOrder, memKind, result, allocatableExpectedValue, allocatableNewValue, barrierType);
         } else {
             append(new CompareAndSwapOp(memKind, memoryOrder, isLogicVariant, result, allocatableExpectedValue, allocatableNewValue, asAllocatable(address)));
         }
@@ -252,8 +250,8 @@ public abstract class AArch64LIRGenerator extends LIRGenerator {
 
     @Override
     public Value emitAtomicReadAndWrite(LIRKind accessKind, Value address, Value newValue, BarrierType barrierType) {
-        if (barrierType != BarrierType.NONE && getBarrierSet() != null) {
-            return getBarrierSet().emitAtomicReadAndWrite(accessKind, address, newValue, barrierType);
+        if (barrierType != BarrierType.NONE && getBarrierSet() instanceof AArch64ReadBarrierSetLIRGenerator barrierSetLIRGenerator) {
+            return barrierSetLIRGenerator.emitAtomicReadAndWrite(this, accessKind, address, newValue, barrierType);
         } else {
             Variable result = newVariable(toRegisterKind(accessKind));
             append(new AtomicReadAndWriteOp((AArch64Kind) accessKind.getPlatformKind(), result, asAllocatable(address), asAllocatable(newValue)));
@@ -288,12 +286,13 @@ public abstract class AArch64LIRGenerator extends LIRGenerator {
     }
 
     /**
-     * Branches to label if (left & right) == 0. If negated is true branchse on non-zero instead.
+     * Branches to label if (left &amp; right) == 0. If negated is true branchse on non-zero
+     * instead.
      *
      * @param left Integer kind. Non null.
      * @param right Integer kind. Non null.
-     * @param trueDestination destination if left & right == 0. Non null.
-     * @param falseDestination destination if left & right != 0. Non null
+     * @param trueDestination destination if left &amp; right == 0. Non null.
+     * @param falseDestination destination if left &amp; right != 0. Non null
      * @param trueSuccessorProbability hoistoric probability that comparison is true
      */
     @Override
@@ -301,6 +300,16 @@ public abstract class AArch64LIRGenerator extends LIRGenerator {
         assert ((AArch64Kind) left.getPlatformKind()).isInteger() && left.getPlatformKind() == right.getPlatformKind() : right + " " + left;
         ((AArch64ArithmeticLIRGenerator) getArithmetic()).emitBinary(AArch64.zr.asValue(LIRKind.combine(left, right)), AArch64ArithmeticOp.TST, true, left, right);
         append(new AArch64ControlFlow.BranchOp(ConditionFlag.EQ, trueDestination, falseDestination, trueSuccessorProbability));
+    }
+
+    @Override
+    public void emitOpMaskTestBranch(Value left, boolean negateLeft, Value right, LabelRef trueDestination, LabelRef falseDestination, double trueSuccessorProbability) {
+        throw GraalError.unsupportedArchitecture(target().arch);
+    }
+
+    @Override
+    public void emitOpMaskOrTestBranch(Value left, Value right, boolean allZeros, LabelRef trueDestination, LabelRef falseDestination, double trueSuccessorProbability) {
+        throw GraalError.unsupportedArchitecture(target().arch);
     }
 
     /**
@@ -376,6 +385,13 @@ public abstract class AArch64LIRGenerator extends LIRGenerator {
         append(new BranchOp(cmpCondition, trueDestination, falseDestination, trueDestinationProbability));
     }
 
+    @Override
+    public Value emitTimeStamp() {
+        Variable result = newVariable(LIRKind.value(AArch64Kind.QWORD));
+        append(new AArch64ReadTimestampCounter(result));
+        return result;
+    }
+
     private static ConditionFlag toConditionFlag(boolean isInt, Condition cond, boolean unorderedIsTrue) {
         return isInt ? toIntConditionFlag(cond) : toFloatConditionFlag(cond, unorderedIsTrue);
     }
@@ -407,7 +423,7 @@ public abstract class AArch64LIRGenerator extends LIRGenerator {
     /**
      * Takes a Condition and returns the correct AArch64 specific ConditionFlag.
      */
-    private static ConditionFlag toIntConditionFlag(Condition cond) {
+    public static ConditionFlag toIntConditionFlag(Condition cond) {
         switch (cond) {
             case EQ:
                 return ConditionFlag.EQ;
@@ -505,13 +521,13 @@ public abstract class AArch64LIRGenerator extends LIRGenerator {
     }
 
     /**
-     * Moves trueValue into result if (left & right) == 0, else falseValue.
+     * Moves trueValue into result if (left &amp; right) == 0, else falseValue.
      *
      * @param left Integer kind. Non null.
      * @param right Integer kind. Non null.
      * @param trueValue Arbitrary value, same type as falseValue. Non null.
      * @param falseValue Arbitrary value, same type as trueValue. Non null.
-     * @return virtual register containing trueValue if (left & right) == 0, else falseValue.
+     * @return virtual register containing trueValue if (left &amp; right) == 0, else falseValue.
      */
     @Override
     public Variable emitIntegerTestMove(Value left, Value right, Value trueValue, Value falseValue) {
@@ -531,6 +547,16 @@ public abstract class AArch64LIRGenerator extends LIRGenerator {
     }
 
     @Override
+    public Variable emitOpMaskTestMove(Value leftVal, boolean negateLeft, Value right, Value trueValue, Value falseValue) {
+        throw GraalError.unsupportedArchitecture(target().arch);
+    }
+
+    @Override
+    public Variable emitOpMaskOrTestMove(Value leftVal, Value right, boolean allZeros, Value trueValue, Value falseValue) {
+        throw GraalError.unsupportedArchitecture(target().arch);
+    }
+
+    @Override
     public void emitStrategySwitch(SwitchStrategy strategy, AllocatableValue key, LabelRef[] keyTargets, LabelRef defaultTarget) {
         append(createStrategySwitchOp(strategy, keyTargets, defaultTarget, key, AArch64LIRGenerator::toIntConditionFlag));
     }
@@ -540,8 +566,8 @@ public abstract class AArch64LIRGenerator extends LIRGenerator {
     }
 
     @Override
-    protected void emitRangeTableSwitch(int lowKey, LabelRef defaultTarget, LabelRef[] targets, AllocatableValue key) {
-        append(new RangeTableSwitchOp(lowKey, defaultTarget, targets, key));
+    protected void emitRangeTableSwitch(int lowKey, LabelRef defaultTarget, LabelRef[] targets, SwitchStrategy remainingStrategy, LabelRef[] remainingTargets, AllocatableValue key) {
+        append(new RangeTableSwitchOp(lowKey, defaultTarget, targets, remainingStrategy, remainingTargets, key));
     }
 
     @Override
@@ -604,6 +630,11 @@ public abstract class AArch64LIRGenerator extends LIRGenerator {
     public void emitArrayCopyWithConversion(EnumSet<?> runtimeCheckedCPUFeatures, Value arraySrc, Value offsetSrc, Value arrayDst, Value offsetDst, Value length, Value dynamicStrides) {
         append(new AArch64ArrayCopyWithConversionsOp(this, null, null,
                         emitConvertNullToZero(arrayDst), asAllocatable(offsetDst), emitConvertNullToZero(arraySrc), asAllocatable(offsetSrc), asAllocatable(length), asAllocatable(dynamicStrides)));
+    }
+
+    @Override
+    public void emitArrayFill(JavaKind kind, EnumSet<?> runtimeCheckedCPUFeatures, Value array, Value arrayBaseOffset, Value length, Value value) {
+        append(new AArch64ArrayFillOp(kind, emitConvertNullToZero(array), asAllocatable(arrayBaseOffset), asAllocatable(length), asAllocatable(value)));
     }
 
     @Override
@@ -812,6 +843,14 @@ public abstract class AArch64LIRGenerator extends LIRGenerator {
     }
 
     @Override
+    public Variable emitVectorizedHashCode(EnumSet<?> runtimeCheckedCPUFeatures, Value arrayStart, Value length, Value initialValue, JavaKind arrayKind) {
+        Variable result = newVariable(LIRKind.value(AArch64Kind.DWORD));
+        append(new AArch64VectorizedHashCodeOp(this,
+                        result, asAllocatable(arrayStart), asAllocatable(length), asAllocatable(initialValue), arrayKind));
+        return result;
+    }
+
+    @Override
     protected JavaConstant zapValueForKind(PlatformKind kind) {
         long dead = 0xDEADDEADDEADDEADL;
         AArch64Kind aarch64Kind = (AArch64Kind) kind;
@@ -888,5 +927,13 @@ public abstract class AArch64LIRGenerator extends LIRGenerator {
         emitMove(regAddress, address);
         emitMove(regLength, length);
         append(new AArch64ZeroMemoryOp(regAddress, regLength, isAligned, useDcZva, zvaLength));
+    }
+
+    public boolean supportsCPUFeature(AArch64.CPUFeature feature) {
+        return ((AArch64) target().arch).getFeatures().contains(feature);
+    }
+
+    public boolean useLSE() {
+        return supportsCPUFeature(AArch64.CPUFeature.LSE);
     }
 }

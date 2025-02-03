@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2022, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2022, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -28,12 +28,6 @@ import java.io.IOException;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.InvocationTargetException;
 
-import jdk.graal.compiler.core.common.PermanentBailoutException;
-import jdk.graal.compiler.core.test.SubprocessTest;
-import jdk.graal.compiler.serviceprovider.GraalServices;
-import jdk.graal.compiler.serviceprovider.JavaVersionUtil;
-import jdk.graal.compiler.test.AddExports;
-import jdk.graal.compiler.test.SubprocessUtil;
 import org.junit.Assert;
 import org.junit.Assume;
 import org.junit.Test;
@@ -42,6 +36,10 @@ import org.objectweb.asm.ClassWriter;
 import org.objectweb.asm.MethodVisitor;
 import org.objectweb.asm.Opcodes;
 
+import jdk.graal.compiler.core.common.PermanentBailoutException;
+import jdk.graal.compiler.core.test.SubprocessTest;
+import jdk.graal.compiler.serviceprovider.JavaVersionUtil;
+import jdk.graal.compiler.test.AddExports;
 import jdk.jfr.Event;
 import jdk.jfr.Recording;
 import jdk.vm.ci.meta.ResolvedJavaMethod;
@@ -60,9 +58,11 @@ import jdk.vm.ci.meta.ResolvedJavaMethod;
 @AddExports("jdk.jfr/jdk.jfr.internal.event")
 public class TestGetEventWriter extends SubprocessTest {
 
+    private static boolean isJFRAvailable() {
+        return ModuleLayer.boot().findModule("jdk.jfr").isPresent();
+    }
+
     private static void initializeJFR() {
-        Assume.assumeTrue("JDK-8282420 came in JDK 19", JavaVersionUtil.JAVA_SPEC >= 19);
-        Assume.assumeTrue("Requires JDK-8290075", GraalServices.hasLookupMethodWithCaller());
         try (Recording r = new Recording()) {
             r.start();
             // Unlocks access to jdk.jfr.internal.event
@@ -71,9 +71,9 @@ public class TestGetEventWriter extends SubprocessTest {
         }
         // Make sure EventWriterFactory can be accessed.
         try {
-            Class.forName("jdk.jfr.internal.event.EventWriterFactory");
+            Class.forName("jdk.jfr.internal.event.EventWriter");
         } catch (ClassNotFoundException e) {
-            throw new AssertionError("Not able to access jdk.jfr.internal.event.EventWriterFactory class", e);
+            throw new AssertionError("Not able to access jdk.jfr.internal.event.EventWriter class", e);
         }
     }
 
@@ -82,7 +82,13 @@ public class TestGetEventWriter extends SubprocessTest {
 
     @Test
     public void test() throws IOException, InterruptedException {
-        Assume.assumeTrue("JDK-8282420 came in JDK 19", JavaVersionUtil.JAVA_SPEC >= 19);
+        Assume.assumeTrue(JavaVersionUtil.JAVA_SPEC > 21);
+        String[] args;
+        if (isJFRAvailable()) {
+            args = new String[0];
+        } else {
+            args = new String[]{"--add-modules", "jdk.jfr"};
+        }
         launchSubprocess(() -> {
             try {
                 initializeJFR();
@@ -96,7 +102,7 @@ public class TestGetEventWriter extends SubprocessTest {
             } catch (Throwable t) {
                 throw rethrowSilently(RuntimeException.class, t);
             }
-        }, SubprocessUtil.PACKAGE_OPENING_OPTIONS);
+        }, args);
     }
 
     @SuppressWarnings({"unused", "unchecked"})
@@ -226,8 +232,8 @@ public class TestGetEventWriter extends SubprocessTest {
         }
         MethodVisitor commit = cw.visitMethod(commitAccess, commitName, "()V", null, null);
         commit.visitCode();
-        commit.visitInsn(Opcodes.LCONST_1);
-        commit.visitMethodInsn(Opcodes.INVOKESTATIC, "jdk/jfr/internal/event/EventWriterFactory", "getEventWriter", "(J)Ljdk/jfr/internal/event/EventWriter;", false);
+        commit.visitMethodInsn(Opcodes.INVOKESTATIC, "jdk/jfr/internal/event/EventWriter", "getEventWriter", "()Ljdk/jfr/internal/event/EventWriter;", false);
+        commit.visitInsn(Opcodes.POP);
         commit.visitInsn(Opcodes.RETURN);
         commit.visitMaxs(0, 0);
         commit.visitEnd();

@@ -26,8 +26,8 @@ package jdk.graal.compiler.nodes.graphbuilderconf;
 
 import static java.lang.String.format;
 import static jdk.graal.compiler.nodes.graphbuilderconf.InvocationPlugins.LateClassPlugins.CLOSED_LATE_CLASS_PLUGIN;
-import static jdk.vm.ci.services.Services.IS_BUILDING_NATIVE_IMAGE;
-import static jdk.vm.ci.services.Services.IS_IN_NATIVE_IMAGE;
+import static org.graalvm.nativeimage.ImageInfo.inImageBuildtimeCode;
+import static org.graalvm.nativeimage.ImageInfo.inImageRuntimeCode;
 
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Method;
@@ -42,6 +42,7 @@ import java.util.Set;
 import java.util.TreeSet;
 import java.util.function.Predicate;
 
+import jdk.vm.ci.meta.JavaType;
 import org.graalvm.collections.EconomicMap;
 import org.graalvm.collections.Equivalence;
 import org.graalvm.collections.MapCursor;
@@ -101,11 +102,6 @@ public class InvocationPlugins {
     public static class InvocationPluginReceiver implements InvocationPlugin.Receiver {
         private final GraphBuilderContext parser;
         private ValueNode[] args;
-        /**
-         * Caches the null checked receiver value. If still {@code null} after application of a
-         * plugin, then the plugin never called {@link #get(boolean)} with {@code true}.
-         */
-        private ValueNode value;
 
         public InvocationPluginReceiver(GraphBuilderContext parser) {
             this.parser = parser;
@@ -114,25 +110,13 @@ public class InvocationPlugins {
         @Override
         public ValueNode get(boolean performNullCheck) {
             assert args != null : "Cannot get the receiver of a static method";
-            if (!performNullCheck) {
-                return args[0];
+            if (performNullCheck) {
+                args[0] = parser.nullCheckedValue(args[0]);
             }
-            if (value == null) {
-                value = parser.nullCheckedValue(args[0]);
-                if (value != args[0]) {
-                    args[0] = value;
-                }
-            }
-            return value;
-        }
-
-        @Override
-        public boolean isConstant() {
-            return args[0].isConstant();
+            return args[0];
         }
 
         public InvocationPluginReceiver init(ResolvedJavaMethod targetMethod, ValueNode[] newArgs) {
-            this.value = null;
             if (!targetMethod.isStatic()) {
                 this.args = newArgs;
                 return this;
@@ -141,23 +125,11 @@ public class InvocationPlugins {
             return null;
         }
 
-        @Override
-        public ValueNode requireNonNull() {
-            if (value == null) {
-                GraalError.guarantee(args != null, "target method is static");
-                if (!StampTool.isPointerNonNull(args[0])) {
-                    throw new GraalError("receiver might be null: %s", value);
-                }
-                value = args[0];
-            }
-            return value;
-        }
-
         /**
          * Determines if {@link #get(boolean)} was called with {@code true}.
          */
         public boolean nullCheckPerformed() {
-            return value != null;
+            return StampTool.isPointerNonNull(args[0]);
         }
     }
 
@@ -192,7 +164,7 @@ public class InvocationPlugins {
         @SuppressWarnings("this-escape")
         public OptionalLazySymbol(String name) {
             this.name = name;
-            if (IS_BUILDING_NATIVE_IMAGE) {
+            if (inImageBuildtimeCode()) {
                 resolve();
             }
         }
@@ -207,7 +179,7 @@ public class InvocationPlugins {
          * resolution fails.
          */
         public Class<?> resolve() {
-            if (!IS_IN_NATIVE_IMAGE && resolved == null) {
+            if (!inImageRuntimeCode() && resolved == null) {
                 Class<?> resolvedOrNull = resolveClass(name, true);
                 resolved = resolvedOrNull == null ? MASK_NULL : resolvedOrNull;
             }
@@ -353,8 +325,8 @@ public class InvocationPlugins {
             }
 
             invocationPlugins.add(plugin);
-            assert IS_IN_NATIVE_IMAGE || Checks.check(this.plugins, declaringType, plugin);
-            assert IS_IN_NATIVE_IMAGE || Checks.checkResolvable(declaringType, plugin);
+            assert inImageRuntimeCode() || Checks.check(this.plugins, declaringType, plugin);
+            assert inImageRuntimeCode() || Checks.checkResolvable(declaringType, plugin);
         }
 
         @Override
@@ -836,8 +808,8 @@ public class InvocationPlugins {
             plugin.rewriteReceiverType(declaringClass);
         }
         put(declaringClass, plugin, allowOverwrite);
-        assert IS_IN_NATIVE_IMAGE || Checks.check(this, declaringClass, plugin);
-        assert IS_IN_NATIVE_IMAGE || Checks.checkResolvable(declaringClass, plugin);
+        assert inImageRuntimeCode() || Checks.check(this, declaringClass, plugin);
+        assert inImageRuntimeCode() || Checks.checkResolvable(declaringClass, plugin);
     }
 
     /**
@@ -1014,6 +986,24 @@ public class InvocationPlugins {
     @NativeImageReinitialize private static Set<String> PrintedIntrinsics = new HashSet<>();
 
     /**
+     * Determines if {@code plugin} is disabled by {@link Options#DisableIntrinsics}.
+     *
+     * @param declaringClassInternalName name of the declaring class for {@code plugin} as returned
+     *            by {@link JavaType#getName()}
+     * @param declaringClassJavaName name of the declaring class for {@code plugin} as returned by
+     *            by {@link JavaType#toJavaName()}
+     */
+    protected boolean isDisabled(InvocationPlugin plugin, String declaringClassInternalName, String declaringClassJavaName, OptionValues options) {
+        initializeDisabledIntrinsicsFilter(options);
+        if (disabledIntrinsicsFilter != null) {
+            if (disabledIntrinsicsFilter.matchesWithArgs(declaringClassJavaName, plugin.name, List.of(plugin.argumentTypes))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
      * Prints the methods for which there are intrinsics in this object if this is the first (or
      * only) isolate in which this method is called and {@link Options#PrintIntrinsics} is true in
      * {@code options}. Intrinsics that have already been printed are skipped.
@@ -1029,15 +1019,21 @@ public class InvocationPlugins {
             long isolateID = IsolateUtil.getIsolateID();
             if (PRINTING_ISOLATE.get() == isolateID || PRINTING_ISOLATE.compareAndSet(0, isolateID)) {
                 synchronized (PRINTING_ISOLATE) {
-                    if (IS_IN_NATIVE_IMAGE && PrintedIntrinsics == null) {
+                    if (inImageRuntimeCode() && PrintedIntrinsics == null) {
                         PrintedIntrinsics = new HashSet<>();
                     }
                     UnmodifiableMapCursor<String, List<InvocationPlugin>> entries = getInvocationPlugins(false, true).getEntries();
                     Set<String> unique = new TreeSet<>();
                     while (entries.advance()) {
-                        String c = MetaUtil.internalNameToJava(entries.getKey(), true, false);
-                        for (InvocationPlugin invocationPlugin : entries.getValue()) {
-                            String method = c + '.' + invocationPlugin.asMethodFilterString();
+                        String declaringClassName = entries.getKey();
+                        String c = MetaUtil.internalNameToJava(declaringClassName, true, false);
+                        for (InvocationPlugin plugin : entries.getValue()) {
+                            String method = c + '.' + plugin.asMethodFilterString();
+                            if (!plugin.canBeDisabled()) {
+                                method += " [cannot be disabled]";
+                            } else if (isDisabled(plugin, declaringClassName, c, options)) {
+                                method += " [disabled]";
+                            }
                             if (PrintedIntrinsics.add(method)) {
                                 unique.add(method);
                             }
@@ -1061,7 +1057,7 @@ public class InvocationPlugins {
     /**
      * Code only used in assertions. Putting this in a separate class reduces class load time.
      */
-    private static class Checks {
+    private static final class Checks {
         private static final int MAX_ARITY = 13;
         /**
          * The set of all {@link InvocationPlugin#apply} method signatures.
@@ -1069,11 +1065,11 @@ public class InvocationPlugins {
         static final Class<?>[][] SIGS;
 
         static {
-            if (!Assertions.assertionsEnabled() && !IS_BUILDING_NATIVE_IMAGE) {
+            if (!Assertions.assertionsEnabled() && !inImageBuildtimeCode()) {
                 throw new GraalError("%s must only be used in assertions", Checks.class.getName());
             }
             ArrayList<Class<?>[]> sigs = new ArrayList<>(MAX_ARITY);
-            if (!IS_IN_NATIVE_IMAGE) {
+            if (!inImageRuntimeCode()) {
                 for (Method method : InvocationPlugin.class.getDeclaredMethods()) {
                     if (!Modifier.isStatic(method.getModifiers()) && method.getName().equals("apply")) {
                         Class<?>[] sig = method.getParameterTypes();
@@ -1208,7 +1204,7 @@ public class InvocationPlugins {
         if (type instanceof OptionalLazySymbol) {
             return ((OptionalLazySymbol) type).resolve();
         }
-        if (IS_IN_NATIVE_IMAGE) {
+        if (inImageRuntimeCode()) {
             throw new GraalError("Unresolved type in native image image:" + type.getTypeName());
         }
         return resolveClass(type.getTypeName(), optional);
